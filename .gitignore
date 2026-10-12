@@ -1,2 +1,4 @@
 .aider*
 /target
+
+# pkill MacDirViews; cargo build --release && cp -f target/release/MacDirViews MacDirViews.app/Contents/MacOS/MacDirViews

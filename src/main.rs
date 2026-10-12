@@ -303,10 +303,11 @@ impl DiskApp {
 
         let guard = self.sizes.lock().unwrap();
 
-        // Top 10 (escludendo la radice, che e' banalmente la piu' grande).
+        // Top 10 delle cartelle contenute (a qualsiasi profondita') nella cartella
+        // in cui si sta navigando, esclusa la cartella stessa.
         let mut all: Vec<(&PathBuf, u64)> = guard
             .iter()
-            .filter(|(p, _)| **p != root)
+            .filter(|(p, _)| **p != view && p.starts_with(&view))
             .map(|(p, s)| (p, *s))
             .collect();
         if all.len() > 10 {
@@ -702,6 +703,7 @@ impl eframe::App for DiskApp {
             .min_width(300.0)
             .show(ctx, |ui| {
                 ui.heading("Top 10 cartelle");
+                ui.label(format!("in: {}", self.view_dir.display()));
                 ui.separator();
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     if self.top10.is_empty() {
