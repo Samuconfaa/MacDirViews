@@ -452,8 +452,41 @@ impl DiskApp {
 
     /// Apre il percorso selezionato nel Finder di macOS.
     fn open_in_finder(&mut self, path: &Path) {
-        if let Err(e) = Command::new("open").arg("-R").arg(path).spawn() {
-            self.status = Some(format!("Impossibile aprire il Finder: {e}"));
+        let mut cmd = if self.is_admin {
+            // Come root, `open` da solo non raggiunge la sessione grafica dell'utente:
+            // lo si esegue dentro la sessione dell'utente loggato con `launchctl asuser`.
+            let uid = std::env::var("SUDO_UID")
+                .ok()
+                .filter(|u| !u.is_empty())
+                .or_else(|| {
+                    Command::new("stat")
+                        .args(["-f", "%u", "/dev/console"])
+                        .output()
+                        .ok()
+                        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                })
+                .unwrap_or_else(|| "501".to_string());
+            let mut c = Command::new("launchctl");
+            c.arg("asuser").arg(uid).arg("open").arg("-R").arg(path);
+            c
+        } else {
+            let mut c = Command::new("open");
+            c.arg("-R").arg(path);
+            c
+        };
+
+        // `output()` attende la fine (e' immediato) e permette di mostrare l'errore reale.
+        match cmd.output() {
+            Ok(out) if out.status.success() => {
+                self.status = None;
+            }
+            Ok(out) => {
+                let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                self.status = Some(format!("Apertura nel Finder fallita: {err}"));
+            }
+            Err(e) => {
+                self.status = Some(format!("Impossibile aprire il Finder: {e}"));
+            }
         }
     }
 
@@ -603,9 +636,10 @@ impl DiskApp {
         ui.separator();
         let mut open_path: Option<PathBuf> = None;
         ui.horizontal(|ui| {
-            let can_open = self.selected.is_some();
+            // Senza selezione si apre la cartella che si sta visualizzando.
+            let can_open = self.selected.is_some() || !self.view_dir.as_os_str().is_empty();
             if ui.add_enabled(can_open, egui::Button::new("Open in Finder")).clicked() {
-                open_path = self.selected.clone();
+                open_path = self.selected.clone().or_else(|| Some(self.view_dir.clone()));
             }
             match hovered {
                 Some(i) => {
