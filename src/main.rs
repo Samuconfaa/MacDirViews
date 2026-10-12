@@ -30,47 +30,29 @@ const MAX_BLOCKS: usize = 50;
 /// Restituisce `true` per le cartelle di sistema macOS che vanno saltate
 /// (protette da SIP/TCC, virtuali, oppure che causerebbero loop o permessi negati).
 fn is_protected_directory(path: &Path) -> bool {
-    const PROTECTED_PREFIXES: &[&str] = &[
-        "/System",
-        "/dev",
+    // Con i permessi admin si scandisce tutto, tranne le cartelle che falserebbero
+    // il conteggio o sono virtuali. Il confronto e' esatto: se la cartella viene
+    // esclusa, non si scende nemmeno nei suoi figli.
+    const SKIPPED: &[&str] = &[
+        "/System/Volumes", // firmlink: il volume Data e' gia' raggiungibile da "/" (doppio conteggio)
+        "/Volumes",        // altri dischi montati + link al disco di avvio (loop)
+        "/dev",            // file di dispositivo
+        "/Network",        // montaggi di rete
+        "/net",            // autofs: puo' bloccarsi
+        "/home",           // autofs: puo' bloccarsi
+        "/.vol",           // accesso per ID, duplica tutto
         "/cores",
-        "/Network",
-        "/Volumes", // contiene il link al disco di avvio -> loop
-        "/private/var/vm",
-        "/private/var/db",
-        "/private/var/folders",
-        "/private/var/protected",
-        "/Library/Application Support/com.apple.TCC",
     ];
-    const PROTECTED_NAMES: &[&str] = &[
-        ".Spotlight-V100",
-        ".fseventsd",
-        ".DocumentRevisions-V100",
-        ".TemporaryItems",
-        ".Trashes",
-        ".MobileBackups",
-        ".PKInstallSandboxManager",
-        ".PKInstallSandboxManager-SystemSoftware",
-    ];
+    SKIPPED.iter().any(|p| path == Path::new(p))
+}
 
-    if PROTECTED_PREFIXES
-        .iter()
-        .any(|p| path == Path::new(p) || path.starts_with(p))
-    {
-        return true;
-    }
-    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-        if PROTECTED_NAMES.contains(&name) {
-            return true;
-        }
-    }
-    // ~/Library/Application Support/com.apple.TCC
-    if let Some(home) = dirs_next::home_dir() {
-        if path.starts_with(home.join("Library/Application Support/com.apple.TCC")) {
-            return true;
-        }
-    }
-    false
+/// `true` se il processo gira come root (uid 0).
+fn is_root() -> bool {
+    Command::new("id")
+        .arg("-u")
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "0")
+        .unwrap_or(false)
 }
 
 /// Converte byte in una stringa leggibile in MB o GB.
@@ -222,6 +204,14 @@ struct DiskApp {
     status: Option<String>,
     was_scanning: bool,
     last_refresh: Instant,
+
+    // Cronologia di navigazione (Indietro / Avanti).
+    back_stack: Vec<PathBuf>,
+    fwd_stack: Vec<PathBuf>,
+
+    // Permessi amministratore.
+    is_admin: bool,
+    admin_msg: Arc<Mutex<Option<String>>>,
 }
 
 impl Default for DiskApp {
@@ -240,6 +230,10 @@ impl Default for DiskApp {
             status: None,
             was_scanning: false,
             last_refresh: Instant::now(),
+            back_stack: Vec::new(),
+            fwd_stack: Vec::new(),
+            is_admin: is_root(),
+            admin_msg: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -283,6 +277,8 @@ impl DiskApp {
         self.total_size = 0;
         self.scan_root = root.clone();
         self.view_dir = root.clone();
+        self.back_stack.clear();
+        self.fwd_stack.clear();
         self.files_counter.store(0, Ordering::Relaxed);
         self.sizes.lock().unwrap().clear();
         *self.scanning.lock().unwrap() = true;
@@ -378,6 +374,81 @@ impl DiskApp {
         self.last_refresh = Instant::now();
     }
 
+    /// Naviga in una cartella registrando la posizione corrente nella cronologia.
+    fn navigate_to(&mut self, dir: PathBuf) {
+        if dir == self.view_dir {
+            return;
+        }
+        let current = self.view_dir.clone();
+        self.back_stack.push(current);
+        self.fwd_stack.clear();
+        self.view_dir = dir;
+        self.selected = None;
+        self.refresh();
+    }
+
+    /// Torna alla cartella visitata prima.
+    fn go_back(&mut self) {
+        if let Some(prev) = self.back_stack.pop() {
+            let current = std::mem::replace(&mut self.view_dir, prev);
+            self.fwd_stack.push(current);
+            self.selected = None;
+            self.refresh();
+        }
+    }
+
+    /// Va avanti dopo un "Indietro".
+    fn go_forward(&mut self) {
+        if let Some(next) = self.fwd_stack.pop() {
+            let current = std::mem::replace(&mut self.view_dir, next);
+            self.back_stack.push(current);
+            self.selected = None;
+            self.refresh();
+        }
+    }
+
+    /// Rilancia l'app con permessi di amministratore (richiede la password di macOS)
+    /// e chiude l'istanza corrente solo se l'avvio riesce.
+    fn relaunch_as_admin(&mut self, ctx: &egui::Context) {
+        let exe = match std::env::current_exe() {
+            Ok(e) => e.to_string_lossy().to_string(),
+            Err(e) => {
+                self.status = Some(format!("Percorso dell'eseguibile non disponibile: {e}"));
+                return;
+            }
+        };
+        if exe.contains('"') || exe.contains('\\') || exe.contains('\'') {
+            self.status = Some(
+                "Il percorso dell'app contiene caratteri non supportati: usa `sudo` da Terminale."
+                    .into(),
+            );
+            return;
+        }
+        let script = format!(
+            r#"do shell script "\"{}\" >/dev/null 2>&1 &" with administrator privileges"#,
+            exe
+        );
+        let msg = Arc::clone(&self.admin_msg);
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            match Command::new("osascript").arg("-e").arg(script).output() {
+                Ok(out) if out.status.success() => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                Ok(out) => {
+                    let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                    *msg.lock().unwrap() =
+                        Some(format!("Avvio come amministratore annullato o fallito: {err}"));
+                    ctx.request_repaint();
+                }
+                Err(e) => {
+                    *msg.lock().unwrap() = Some(format!("Impossibile eseguire osascript: {e}"));
+                    ctx.request_repaint();
+                }
+            }
+        });
+    }
+
     /// Apre il percorso selezionato nel Finder di macOS.
     fn open_in_finder(&mut self, path: &Path) {
         if let Err(e) = Command::new("open").arg("-R").arg(path).spawn() {
@@ -389,7 +460,21 @@ impl DiskApp {
     fn central_ui(&mut self, ui: &mut egui::Ui, scanning: bool) {
         // --- Barra di navigazione ---
         let mut go_up = false;
+        let mut go_back = false;
+        let mut go_fwd = false;
         ui.horizontal(|ui| {
+            if ui
+                .add_enabled(!self.back_stack.is_empty(), egui::Button::new("< Indietro"))
+                .clicked()
+            {
+                go_back = true;
+            }
+            if ui
+                .add_enabled(!self.fwd_stack.is_empty(), egui::Button::new("Avanti >"))
+                .clicked()
+            {
+                go_fwd = true;
+            }
             let can_up = self.view_dir != self.scan_root
                 && self.view_dir.parent().is_some()
                 && !self.scan_root.as_os_str().is_empty();
@@ -398,11 +483,17 @@ impl DiskApp {
             }
             ui.label(self.view_dir.display().to_string());
         });
-        if go_up {
-            if let Some(parent) = self.view_dir.parent() {
-                self.view_dir = parent.to_path_buf();
-                self.selected = None;
-                self.refresh();
+        // Tasto "indietro" del mouse (se presente).
+        if ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Extra1)) {
+            go_back = true;
+        }
+        if go_back {
+            self.go_back();
+        } else if go_fwd {
+            self.go_forward();
+        } else if go_up {
+            if let Some(parent) = self.view_dir.parent().map(|p| p.to_path_buf()) {
+                self.navigate_to(parent);
             }
         }
 
@@ -543,9 +634,7 @@ impl DiskApp {
             self.open_in_finder(&p);
         }
         if let Some(dir) = new_view {
-            self.view_dir = dir;
-            self.selected = None;
-            self.refresh();
+            self.navigate_to(dir);
         }
     }
 }
@@ -554,6 +643,12 @@ impl eframe::App for DiskApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Lettura dello stato: il guard e' un temporaneo e viene rilasciato subito.
         let scanning = *self.scanning.lock().unwrap();
+
+        // Eventuale errore dal thread di avvio come amministratore.
+        let admin_err = self.admin_msg.lock().unwrap().take();
+        if let Some(m) = admin_err {
+            self.status = Some(m);
+        }
 
         if scanning {
             // Durante la scansione la UI resta fluida: ridisegno periodico + aggiornamento dati.
@@ -571,15 +666,31 @@ impl eframe::App for DiskApp {
         // --- Barra superiore ---
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
             ui.add_space(6.0);
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label("Percorso:");
                 ui.add(
                     egui::TextEdit::singleline(&mut self.path_input)
                         .hint_text("vuoto = cartella Home")
-                        .desired_width(420.0),
+                        .desired_width(320.0),
                 );
                 if ui.add_enabled(!scanning, egui::Button::new("Start Scan")).clicked() {
                     self.start_scan(ctx);
+                }
+                if ui
+                    .add_enabled(!scanning, egui::Button::new("Scansiona tutto il disco (/)"))
+                    .clicked()
+                {
+                    self.path_input = "/".to_string();
+                    self.start_scan(ctx);
+                }
+                ui.separator();
+                if self.is_admin {
+                    ui.colored_label(Color32::LIGHT_GREEN, "Admin: attivo");
+                } else {
+                    ui.colored_label(Color32::YELLOW, "Admin: non attivo");
+                    if ui.add_enabled(!scanning, egui::Button::new("Riavvia come amministratore")).clicked() {
+                        self.relaunch_as_admin(ctx);
+                    }
                 }
             });
             ui.add_space(6.0);

@@ -3,6 +3,16 @@
 version = 4
 
 [[package]]
+name = "MacDirViews"
+version = "0.1.0"
+dependencies = [
+ "dirs-next",
+ "eframe",
+ "egui",
+ "jwalk",
+]
+
+[[package]]
 name = "ab_glyph"
 version = "0.2.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -906,16 +916,6 @@ dependencies = [
  "libc",
  "redox_users",
  "winapi",
-]
-
-[[package]]
-name = "diskscope"
-version = "0.1.0"
-dependencies = [
- "dirs-next",
- "eframe",
- "egui",
- "jwalk",
 ]
 
 [[package]]

@@ -1,5 +1,5 @@
 [package]
-name = "diskscope"
+name = "MacDirViews"
 version = "0.1.0"
 edition = "2021"
 description = "Clone moderno di WinDirStat per macOS: analizzatore di spazio disco con treemap"
