@@ -55,6 +55,104 @@ fn is_root() -> bool {
         .unwrap_or(false)
 }
 
+/// Crea un comando che gira nella sessione grafica dell'utente loggato.
+/// Come root si passa da `launchctl asuser <uid>`, altrimenti il comando e' diretto.
+fn user_session_command(is_admin: bool, program: &str) -> Command {
+    if is_admin {
+        let uid = std::env::var("SUDO_UID")
+            .ok()
+            .filter(|u| !u.is_empty())
+            .or_else(|| {
+                Command::new("stat")
+                    .args(["-f", "%u", "/dev/console"])
+                    .output()
+                    .ok()
+                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            })
+            .unwrap_or_else(|| "501".to_string());
+        let mut c = Command::new("launchctl");
+        c.arg("asuser").arg(uid).arg(program);
+        c
+    } else {
+        Command::new(program)
+    }
+}
+
+/// Cartelle che non si devono mai poter eliminare dall'app: la radice, le cartelle
+/// di primo livello, le home degli utenti, gli antenati della propria Home e le
+/// cartelle di sistema.
+fn is_deletion_forbidden(path: &Path) -> bool {
+    match path.parent() {
+        None => return true,
+        Some(p) if p == Path::new("/") || p == Path::new("/Users") => return true,
+        _ => {}
+    }
+    if let Some(home) = dirs_next::home_dir() {
+        if home.starts_with(path) {
+            return true; // la Home stessa o una cartella che la contiene
+        }
+    }
+    const SYSTEM: &[&str] = &[
+        "/System", "/usr", "/bin", "/sbin", "/etc", "/dev", "/cores", "/Volumes", "/private",
+    ];
+    SYSTEM.iter().any(|p| path.starts_with(p))
+}
+
+/// Sposta una cartella nel Cestino tramite il Finder.
+fn move_to_trash(path: &Path, is_admin: bool) -> Result<(), String> {
+    let p = path.to_string_lossy();
+    if p.contains('"') || p.contains('\\') {
+        return Err("il percorso contiene caratteri non supportati".into());
+    }
+    let mut cmd = user_session_command(is_admin, "osascript");
+    cmd.arg("-e")
+        .arg(format!(r#"tell application "Finder" to delete POSIX file "{}""#, p));
+    match cmd.output() {
+        Ok(o) if o.status.success() => Ok(()),
+        Ok(o) => Err(String::from_utf8_lossy(&o.stderr).trim().to_string()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Voci del menu contestuale di una cartella (usato da treemap e Top 10).
+fn folder_menu(
+    ui: &mut egui::Ui,
+    path: &Path,
+    can_modify: bool,
+    open_req: &mut Option<PathBuf>,
+    del_req: &mut Option<(PathBuf, bool)>,
+) {
+    ui.label(path.display().to_string());
+    ui.separator();
+    if ui.button("Apri nel Finder").clicked() {
+        *open_req = Some(path.to_path_buf());
+        ui.close_menu();
+    }
+    let allowed = can_modify && !is_deletion_forbidden(path);
+    if ui
+        .add_enabled(allowed, egui::Button::new("Sposta nel Cestino..."))
+        .clicked()
+    {
+        *del_req = Some((path.to_path_buf(), false));
+        ui.close_menu();
+    }
+    if ui
+        .add_enabled(allowed, egui::Button::new("Elimina definitivamente..."))
+        .clicked()
+    {
+        *del_req = Some((path.to_path_buf(), true));
+        ui.close_menu();
+    }
+    if !allowed {
+        let why = if can_modify {
+            "Cartella protetta: non eliminabile da qui."
+        } else {
+            "Eliminazione disponibile a scansione finita."
+        };
+        ui.label(why);
+    }
+}
+
 /// Converte byte in una stringa leggibile in MB o GB.
 fn fmt_size(bytes: u64) -> String {
     const MB: f64 = 1024.0 * 1024.0;
@@ -212,6 +310,12 @@ struct DiskApp {
     // Permessi amministratore.
     is_admin: bool,
     admin_msg: Arc<Mutex<Option<String>>>,
+
+    // Eliminazione: bersaglio del menu contestuale, richiesta in attesa di conferma
+    // (percorso, definitiva?) ed esito del thread di eliminazione.
+    ctx_target: Option<PathBuf>,
+    pending_delete: Option<(PathBuf, bool)>,
+    delete_result: Arc<Mutex<Option<(PathBuf, Result<(), String>)>>>,
 }
 
 impl Default for DiskApp {
@@ -234,6 +338,9 @@ impl Default for DiskApp {
             fwd_stack: Vec::new(),
             is_admin: is_root(),
             admin_msg: Arc::new(Mutex::new(None)),
+            ctx_target: None,
+            pending_delete: None,
+            delete_result: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -450,30 +557,61 @@ impl DiskApp {
         });
     }
 
+    /// Avvia l'eliminazione in un thread (Cestino oppure definitiva).
+    fn start_delete(&mut self, ctx: &egui::Context, path: PathBuf, permanent: bool) {
+        if is_deletion_forbidden(&path) {
+            self.status = Some(format!("Cartella protetta, non eliminabile: {}", path.display()));
+            return;
+        }
+        self.status = Some(format!("Eliminazione in corso: {}", path.display()));
+        let result = Arc::clone(&self.delete_result);
+        let is_admin = self.is_admin;
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let res = if permanent {
+                std::fs::remove_dir_all(&path).map_err(|e| e.to_string())
+            } else {
+                move_to_trash(&path, is_admin)
+            };
+            *result.lock().unwrap() = Some((path, res));
+            ctx.request_repaint();
+        });
+    }
+
+    /// Dopo un'eliminazione riuscita aggiorna dimensioni, navigazione e treemap
+    /// senza dover rifare la scansione.
+    fn apply_deletion(&mut self, path: &Path) {
+        {
+            let mut map = self.sizes.lock().unwrap();
+            let removed = map.get(path).copied().unwrap_or(0);
+            map.retain(|p, _| !p.starts_with(path));
+            for anc in path.ancestors().skip(1) {
+                if let Some(v) = map.get_mut(anc) {
+                    *v = v.saturating_sub(removed);
+                }
+                if anc == self.scan_root.as_path() {
+                    break;
+                }
+            }
+        }
+        self.back_stack.retain(|p| !p.starts_with(path));
+        self.fwd_stack.retain(|p| !p.starts_with(path));
+        if self.selected.as_ref().map_or(false, |s| s.starts_with(path)) {
+            self.selected = None;
+        }
+        if self.view_dir.starts_with(path) {
+            if let Some(parent) = path.parent() {
+                self.view_dir = parent.to_path_buf();
+            }
+        }
+        self.refresh();
+    }
+
     /// Apre il percorso selezionato nel Finder di macOS.
     fn open_in_finder(&mut self, path: &Path) {
-        let mut cmd = if self.is_admin {
-            // Come root, `open` da solo non raggiunge la sessione grafica dell'utente:
-            // lo si esegue dentro la sessione dell'utente loggato con `launchctl asuser`.
-            let uid = std::env::var("SUDO_UID")
-                .ok()
-                .filter(|u| !u.is_empty())
-                .or_else(|| {
-                    Command::new("stat")
-                        .args(["-f", "%u", "/dev/console"])
-                        .output()
-                        .ok()
-                        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-                })
-                .unwrap_or_else(|| "501".to_string());
-            let mut c = Command::new("launchctl");
-            c.arg("asuser").arg(uid).arg("open").arg("-R").arg(path);
-            c
-        } else {
-            let mut c = Command::new("open");
-            c.arg("-R").arg(path);
-            c
-        };
+        // Come root, `open` da solo non raggiunge la sessione grafica dell'utente.
+        let mut cmd = user_session_command(self.is_admin, "open");
+        cmd.arg("-R").arg(path);
 
         // `output()` attende la fine (e' immediato) e permette di mostrare l'errore reale.
         match cmd.output() {
@@ -619,6 +757,21 @@ impl DiskApp {
             );
         }
 
+        // Tasto destro: seleziona il blocco sotto il mouse e lo usa per il menu contestuale.
+        if response.secondary_clicked() {
+            self.ctx_target = hovered.and_then(|i| {
+                let b = &self.blocks[i];
+                if b.is_dir {
+                    Some(b.path.clone())
+                } else {
+                    None
+                }
+            });
+            if let Some(p) = self.ctx_target.clone() {
+                self.selected = Some(p);
+            }
+        }
+
         // Click = seleziona, doppio click = entra nella cartella.
         let mut new_view: Option<PathBuf> = None;
         if let Some(i) = hovered {
@@ -658,6 +811,19 @@ impl DiskApp {
             }
         });
 
+        // Menu contestuale (tasto destro) sulla treemap.
+        let can_modify = !scanning;
+        let mut del_req: Option<(PathBuf, bool)> = None;
+        response.context_menu(|ui| match self.ctx_target.clone() {
+            Some(p) => folder_menu(ui, &p, can_modify, &mut open_path, &mut del_req),
+            None => {
+                ui.label("Nessuna cartella qui.");
+            }
+        });
+        if let Some(d) = del_req {
+            self.pending_delete = Some(d);
+        }
+
         // Tooltip che segue il mouse con percorso completo e dimensione.
         if let Some(i) = hovered {
             let b = &self.blocks[i];
@@ -683,6 +849,18 @@ impl eframe::App for DiskApp {
         let admin_err = self.admin_msg.lock().unwrap().take();
         if let Some(m) = admin_err {
             self.status = Some(m);
+        }
+
+        // Esito di un'eliminazione terminata nel thread.
+        let delete_done = self.delete_result.lock().unwrap().take();
+        if let Some((path, res)) = delete_done {
+            match res {
+                Ok(()) => {
+                    self.apply_deletion(&path);
+                    self.status = None;
+                }
+                Err(e) => self.status = Some(format!("Eliminazione fallita: {e}")),
+            }
         }
 
         if scanning {
@@ -733,6 +911,9 @@ impl eframe::App for DiskApp {
 
         // --- Classifica delle 10 cartelle piu' grandi ---
         let mut clicked_path: Option<PathBuf> = None;
+        let mut side_open: Option<PathBuf> = None;
+        let mut side_del: Option<(PathBuf, bool)> = None;
+        let can_modify = !scanning;
         egui::SidePanel::left("top10_panel")
             .min_width(300.0)
             .show(ctx, |ui| {
@@ -746,9 +927,14 @@ impl eframe::App for DiskApp {
                     for (i, (path, size)) in self.top10.iter().enumerate() {
                         let text = format!("{}. {}\n{}", i + 1, fmt_size(*size), path.display());
                         let is_sel = self.selected.as_ref() == Some(path);
-                        if ui.selectable_label(is_sel, text).clicked() {
+                        let resp = ui.selectable_label(is_sel, text);
+                        if resp.clicked() {
                             clicked_path = Some(path.clone());
                         }
+                        // Tasto destro anche sulle voci della Top 10.
+                        resp.context_menu(|ui| {
+                            folder_menu(ui, path, can_modify, &mut side_open, &mut side_del);
+                        });
                         ui.add_space(2.0);
                     }
                 });
@@ -756,11 +942,57 @@ impl eframe::App for DiskApp {
         if let Some(p) = clicked_path {
             self.selected = Some(p);
         }
+        if let Some(p) = side_open {
+            self.open_in_finder(&p);
+        }
+        if let Some(d) = side_del {
+            self.pending_delete = Some(d);
+        }
 
         // --- Treemap e dettagli ---
         egui::CentralPanel::default().show(ctx, |ui| {
             self.central_ui(ui, scanning);
         });
+
+        // --- Finestra di conferma eliminazione ---
+        if let Some((path, permanent)) = self.pending_delete.clone() {
+            let size = self.sizes.lock().unwrap().get(&path).copied().unwrap_or(0);
+            let mut confirm = false;
+            let mut cancel = false;
+            egui::Window::new("Conferma eliminazione")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label(path.display().to_string());
+                    ui.label(format!("Dimensione: {}", fmt_size(size)));
+                    ui.add_space(6.0);
+                    if permanent {
+                        ui.colored_label(
+                            Color32::LIGHT_RED,
+                            "ATTENZIONE: eliminazione definitiva, non si puo' annullare.",
+                        );
+                    } else {
+                        ui.label("La cartella verra' spostata nel Cestino.");
+                    }
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        let label = if permanent { "Elimina definitivamente" } else { "Sposta nel Cestino" };
+                        if ui.button(label).clicked() {
+                            confirm = true;
+                        }
+                        if ui.button("Annulla").clicked() {
+                            cancel = true;
+                        }
+                    });
+                });
+            if confirm {
+                self.pending_delete = None;
+                self.start_delete(ctx, path, permanent);
+            } else if cancel {
+                self.pending_delete = None;
+            }
+        }
     }
 }
 
