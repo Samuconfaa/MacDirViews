@@ -14,4 +14,4 @@ dirs-next = "2"
 [package.metadata.bundle]
 name = "MacDirViews"
 identifier = "com.macdirviews.app"
-icon = ["assets/icon.png"]
+icon = ["assets/icon.icns"]
