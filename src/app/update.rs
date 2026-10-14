@@ -29,6 +29,17 @@ impl eframe::App for MacDirViewsApp {
             }
         }
 
+        // Drag & drop: accetta cartelle trascinate sulla finestra.
+        let dropped_files: Vec<_> = ctx.input(|i| i.raw.dropped_files.clone());
+        if let Some(file) = dropped_files.first() {
+            if let Some(path) = &file.path {
+                if path.is_dir() {
+                    self.path_input = path.display().to_string();
+                    self.start_scan(ctx);
+                }
+            }
+        }
+
         if scanning {
             // Durante la scansione la UI resta fluida: ridisegno periodico + aggiornamento dati.
             ctx.request_repaint_after(Duration::from_millis(100));

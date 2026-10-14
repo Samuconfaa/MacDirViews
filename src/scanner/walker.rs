@@ -1,30 +1,43 @@
 //! Il thread di scansione vero e proprio.
+//!
+//! Novita' rispetto alla versione precedente:
+//! - `AtomicBool` per fermare la scansione in qualsiasi momento.
+//! - Deduplicazione hard link / cloni APFS tramite `HashSet<(u64, u64)>` di (dev, ino).
+//! - Conteggio delle cartelle saltate (permesso negato).
+//! - Classifica dei file piu' grandi.
+//! - Struttura ad albero incrementale (niente piu' rollup completo a ogni secondo).
 
-use std::collections::HashMap;
-use std::os::unix::fs::MetadataExt; // per `blocks()` (spazio realmente occupato su disco)
+use std::collections::HashSet;
+use std::os::unix::fs::MetadataExt; // per blocks(), dev(), ino(), nlink()
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
 use jwalk::WalkDir;
 
-use super::rollup::rollup;
+use super::tree::DirTree;
 use crate::system::protection::is_protected_directory;
 
-/// Cammina l'albero a partire da `root` e riempie `sizes`.
-/// Gira nel thread di scansione; aggiorna periodicamente la mappa condivisa.
+/// Numero massimo di file nella classifica "Top N file".
+const MAX_TOP_FILES: usize = 20;
+
+/// Cammina l'albero a partire da `root` e riempie `tree`.
+/// Gira nel thread di scansione; aggiorna periodicamente l'albero condiviso.
 pub fn scan_directory(
     root: PathBuf,
     scanning: Arc<Mutex<bool>>,
-    sizes: Arc<Mutex<HashMap<PathBuf, u64>>>,
+    tree: Arc<Mutex<DirTree>>,
     files_counter: Arc<AtomicU64>,
+    cancel_flag: Arc<AtomicBool>,
     ctx: egui::Context,
 ) {
-    // Dimensioni dirette per cartella, tenute in locale per non contendere il mutex.
-    let mut direct: HashMap<PathBuf, u64> = HashMap::new();
-    direct.insert(root.clone(), 0);
+    // Albero locale per evitare di contendere il mutex a ogni file.
+    let mut local_tree = DirTree::new(root.clone());
+
+    // Set di (dev, ino) per la deduplicazione hard link / cloni APFS.
+    let mut seen_inodes: HashSet<(u64, u64)> = HashSet::new();
 
     let walker = WalkDir::new(&root)
         .skip_hidden(false)
@@ -33,7 +46,7 @@ pub fn scan_directory(
             // Salta le cartelle protette prima ancora di entrarci.
             children.retain(|entry| match entry {
                 Ok(e) => !(e.file_type().is_dir() && is_protected_directory(&e.path())),
-                Err(_) => true, // gli errori (permessi negati) vengono ignorati dopo
+                Err(_) => true, // gli errori (permessi negati) vengono gestiti dopo
             });
         });
 
@@ -41,27 +54,62 @@ pub fn scan_directory(
     let mut seen: u64 = 0;
 
     for entry in walker {
+        // Controlla il flag di cancellazione.
+        if cancel_flag.load(Ordering::Relaxed) {
+            break;
+        }
+
         let entry = match entry {
             Ok(e) => e,
-            Err(_) => continue, // permesso negato o file sparito: si ignora
+            Err(e) => {
+                // Permesso negato o altro errore su una directory.
+                let path = e
+                    .path()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| PathBuf::from("<sconosciuto>"));
+                local_tree.record_skipped(&path, &e.to_string());
+                continue;
+            }
         };
-        if !entry.file_type().is_file() {
-            continue; // niente symlink/cartelle: contiamo solo i file
+
+        if entry.file_type().is_dir() {
+            // Verifica che la directory sia leggibile.
+            let path = entry.path();
+            if std::fs::read_dir(&path).is_err() {
+                local_tree.record_skipped(&path, "Permesso negato");
+            }
+            continue;
         }
+
+        if !entry.file_type().is_file() {
+            continue; // niente symlink: contiamo solo i file regolari
+        }
+
         let meta = match entry.metadata() {
             Ok(m) => m,
             Err(_) => continue,
         };
+
+        // Deduplicazione hard link / cloni APFS:
+        // Se il file ha piu' di un nome (nlink > 1), controlliamo se l'abbiamo gia' visto.
+        if meta.nlink() > 1 {
+            let key = (meta.dev(), meta.ino());
+            if !seen_inodes.insert(key) {
+                continue; // gia' contato con un altro nome
+            }
+        }
+
         // Spazio realmente allocato su disco (blocchi da 512 byte).
         let size = meta.blocks() * 512;
 
         let path = entry.path();
         if let Some(parent) = path.parent() {
-            if let Some(v) = direct.get_mut(parent) {
-                *v += size;
-            } else {
-                direct.insert(parent.to_path_buf(), size);
-            }
+            local_tree.add_file(parent, size);
+        }
+
+        // Classifica file piu' grandi.
+        if size > 0 {
+            local_tree.add_top_file(path.clone(), size, MAX_TOP_FILES);
         }
 
         seen += 1;
@@ -69,8 +117,7 @@ pub fn scan_directory(
             files_counter.store(seen, Ordering::Relaxed);
             // Pubblica un'istantanea circa ogni secondo, cosi' la UI mostra dati parziali.
             if last_publish.elapsed() >= Duration::from_secs(1) {
-                let snapshot = rollup(&direct, &root);
-                *sizes.lock().unwrap() = snapshot;
+                *tree.lock().unwrap() = local_tree.clone();
                 last_publish = Instant::now();
                 ctx.request_repaint();
             }
@@ -79,8 +126,7 @@ pub fn scan_directory(
 
     // Risultato finale.
     files_counter.store(seen, Ordering::Relaxed);
-    let snapshot = rollup(&direct, &root);
-    *sizes.lock().unwrap() = snapshot;
+    *tree.lock().unwrap() = local_tree;
     *scanning.lock().unwrap() = false;
     ctx.request_repaint();
 }

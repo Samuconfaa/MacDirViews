@@ -11,7 +11,7 @@ use eframe::egui;
 use super::block::Block;
 use super::MacDirViewsApp;
 use crate::constants::MAX_BLOCKS;
-use crate::scanner::scan_directory;
+use crate::scanner::{scan_directory, DirTree};
 use crate::system::finder::{move_to_trash, reveal_in_finder};
 use crate::system::protection::is_deletion_forbidden;
 
@@ -52,77 +52,115 @@ impl MacDirViewsApp {
         self.top10.clear();
         self.blocks.clear();
         self.total_size = 0;
+        self.top_files.clear();
+        self.skipped_dirs = 0;
+        self.skipped_messages.clear();
         self.scan_root = root.clone();
         self.view_dir = root.clone();
         self.back_stack.clear();
         self.fwd_stack.clear();
         self.files_counter.store(0, Ordering::Relaxed);
-        self.sizes.lock().unwrap().clear();
+        self.cancel_flag.store(false, Ordering::Relaxed);
+        *self.tree.lock().unwrap() = DirTree::new(root.clone());
         *self.scanning.lock().unwrap() = true;
         self.last_refresh = Instant::now();
 
         // Cloni per il thread.
         let scanning = Arc::clone(&self.scanning);
-        let sizes = Arc::clone(&self.sizes);
+        let tree = Arc::clone(&self.tree);
         let counter = Arc::clone(&self.files_counter);
+        let cancel = Arc::clone(&self.cancel_flag);
         let ctx = ctx.clone();
 
         std::thread::spawn(move || {
-            scan_directory(root, scanning, sizes, counter, ctx);
+            scan_directory(root, scanning, tree, counter, cancel, ctx);
         });
     }
 
-    /// Ricalcola top-10 e blocchi della treemap dalla mappa condivisa.
+    /// Ferma la scansione in corso.
+    pub(super) fn stop_scan(&mut self) {
+        self.cancel_flag.store(true, Ordering::Relaxed);
+    }
+
+    /// Apre la finestra di dialogo nativa per scegliere una cartella.
+    pub(super) fn browse_folder(&mut self) {
+        if let Some(path) = rfd::FileDialog::new().pick_folder() {
+            self.path_input = path.display().to_string();
+        }
+    }
+
+    /// Ricalcola top-10 e blocchi della treemap dall'albero condiviso.
     /// Il mutex viene rilasciato esplicitamente PRIMA di toccare qualsiasi altro campo.
     pub(super) fn refresh(&mut self) {
         let view = self.view_dir.clone();
-        let root = self.scan_root.clone();
 
-        let guard = self.sizes.lock().unwrap();
+        let guard = self.tree.lock().unwrap();
+
+        // Dimensione totale della scansione.
+        let root_size = guard.total_size();
 
         // Top 10 delle cartelle contenute (a qualsiasi profondita') nella cartella
         // in cui si sta navigando, esclusa la cartella stessa.
-        let mut all: Vec<(&PathBuf, u64)> = guard
-            .iter()
-            .filter(|(p, _)| **p != view && p.starts_with(&view))
-            .map(|(p, s)| (p, *s))
-            .collect();
-        if all.len() > 10 {
-            all.select_nth_unstable_by(10, |a, b| b.1.cmp(&a.1));
-            all.truncate(10);
+        let mut all_descendants = guard.all_descendants(&view);
+        if all_descendants.len() > 10 {
+            all_descendants.select_nth_unstable_by(10, |a, b| b.1.cmp(&a.1));
+            all_descendants.truncate(10);
         }
-        all.sort_by(|a, b| b.1.cmp(&a.1));
-        let top10: Vec<(PathBuf, u64)> = all.into_iter().map(|(p, s)| (p.clone(), s)).collect();
+        all_descendants.sort_by(|a, b| b.1.cmp(&a.1));
+        let top10 = all_descendants;
 
         // Figli diretti della cartella visualizzata.
-        let view_size = guard.get(&view).copied().unwrap_or(0);
-        let root_size = guard.get(&root).copied().unwrap_or(0);
-        let mut children: Vec<(PathBuf, u64)> = guard
-            .iter()
-            .filter(|(p, _)| **p != view && p.parent() == Some(view.as_path()))
-            .map(|(p, s)| (p.clone(), *s))
-            .collect();
+        let children_data = guard.children_of(&view);
+        let view_size = guard.size_of(&view);
+
+        // Top file e cartelle saltate.
+        let top_files = guard.top_files.clone();
+        let skipped_dirs = guard.skipped_dirs;
+        let skipped_messages = guard.skipped_messages.clone();
 
         // Lock rilasciato qui: da ora si lavora solo su copie locali.
         drop(guard);
 
-        children.sort_by(|a, b| b.1.cmp(&a.1));
-        let children_sum: u64 = children.iter().map(|c| c.1).sum();
+        let children_sum: u64 = children_data.iter().map(|c| c.2).sum();
         let own_files = view_size.saturating_sub(children_sum);
 
         let mut blocks: Vec<Block> = Vec::new();
         let mut rest_size: u64 = 0;
         let mut rest_count: usize = 0;
-        for (i, (path, size)) in children.into_iter().enumerate() {
+        for (i, (_name, path, size)) in children_data.into_iter().enumerate() {
             if size == 0 {
                 continue;
+            }
+            // Applica il filtro soglia minima.
+            let min_bytes = (self.filter_min_size_mb as u64) * 1024 * 1024;
+            if min_bytes > 0 && size < min_bytes {
+                rest_size += size;
+                rest_count += 1;
+                continue;
+            }
+            // Applica il filtro ricerca.
+            if !self.search_query.is_empty() {
+                let label = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                if !label.to_lowercase().contains(&self.search_query.to_lowercase()) {
+                    rest_size += size;
+                    rest_count += 1;
+                    continue;
+                }
             }
             if i < MAX_BLOCKS {
                 let label = path
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| path.display().to_string());
-                blocks.push(Block { path, label, size, is_dir: true });
+                blocks.push(Block {
+                    path,
+                    label,
+                    size,
+                    is_dir: true,
+                });
             } else {
                 rest_size += size;
                 rest_count += 1;
@@ -149,6 +187,9 @@ impl MacDirViewsApp {
         self.top10 = top10;
         self.blocks = blocks;
         self.total_size = root_size;
+        self.top_files = top_files;
+        self.skipped_dirs = skipped_dirs;
+        self.skipped_messages = skipped_messages;
         self.last_refresh = Instant::now();
     }
 
@@ -252,21 +293,16 @@ impl MacDirViewsApp {
     /// senza dover rifare la scansione.
     pub(super) fn apply_deletion(&mut self, path: &Path) {
         {
-            let mut map = self.sizes.lock().unwrap();
-            let removed = map.get(path).copied().unwrap_or(0);
-            map.retain(|p, _| !p.starts_with(path));
-            for anc in path.ancestors().skip(1) {
-                if let Some(v) = map.get_mut(anc) {
-                    *v = v.saturating_sub(removed);
-                }
-                if anc == self.scan_root.as_path() {
-                    break;
-                }
-            }
+            let mut tree = self.tree.lock().unwrap();
+            tree.remove(path);
         }
         self.back_stack.retain(|p| !p.starts_with(path));
         self.fwd_stack.retain(|p| !p.starts_with(path));
-        if self.selected.as_ref().map_or(false, |s| s.starts_with(path)) {
+        if self
+            .selected
+            .as_ref()
+            .map_or(false, |s| s.starts_with(path))
+        {
             self.selected = None;
         }
         if self.view_dir.starts_with(path) {

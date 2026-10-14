@@ -1,12 +1,13 @@
-//! Pannello centrale: navigazione, treemap, informazioni e pulsante Finder.
+//! Pannello centrale: navigazione, treemap squarified, informazioni e pulsante Finder.
 
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
 use eframe::egui;
-use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke};
+use egui::{Align2, Color32, FontId, Pos2, Stroke};
 
 use super::folder_menu::folder_menu;
+use crate::app::squarify::{squarify, TreemapItem};
 use crate::app::MacDirViewsApp;
 use crate::utils::color::color_for;
 use crate::utils::format::fmt_size;
@@ -25,7 +26,15 @@ impl MacDirViewsApp {
                 ));
             });
         } else if self.total_size > 0 {
-            ui.label(format!("Totale scansionato: {}", fmt_size(self.total_size)));
+            ui.horizontal(|ui| {
+                ui.label(format!("Totale scansionato: {}", fmt_size(self.total_size)));
+                if self.skipped_dirs > 0 {
+                    ui.colored_label(
+                        Color32::YELLOW,
+                        format!(" ({} cartelle non leggibili)", self.skipped_dirs),
+                    );
+                }
+            });
         }
         if let Some(msg) = &self.status {
             ui.colored_label(Color32::LIGHT_RED, msg);
@@ -33,7 +42,7 @@ impl MacDirViewsApp {
 
         ui.add_space(4.0);
 
-        // --- Treemap orizzontale ---
+        // --- Treemap Squarified ---
         let avail = ui.available_size();
         let size = egui::vec2(avail.x.max(50.0), (avail.y - 80.0).max(100.0));
         let (response, painter) = ui.allocate_painter(size, egui::Sense::click());
@@ -46,26 +55,36 @@ impl MacDirViewsApp {
         let mut hovered: Option<usize> = None;
 
         if total > 0 {
-            let n = self.blocks.len();
-            let mut x = rect.left();
-            for (i, block) in self.blocks.iter().enumerate() {
-                // Larghezza proporzionale alla dimensione; l'ultimo blocco chiude lo spazio.
-                let w = if i + 1 == n {
-                    (rect.right() - x).max(0.0)
-                } else {
-                    rect.width() * (block.size as f32 / total as f32)
-                };
-                let r = Rect::from_min_size(Pos2::new(x, rect.top()), egui::vec2(w, rect.height()));
-                x += w;
+            // Prepara gli elementi per l'algoritmo squarified.
+            let items: Vec<TreemapItem> = self
+                .blocks
+                .iter()
+                .enumerate()
+                .map(|(i, b)| TreemapItem {
+                    index: i,
+                    area: b.size as f64,
+                })
+                .collect();
+
+            let layout = squarify(&items, rect);
+
+            for lr in &layout {
+                let i = lr.index;
+                let block = &self.blocks[i];
+                let r = lr.rect;
 
                 let is_hover = pointer.map_or(false, |p| r.contains(p));
                 if is_hover {
                     hovered = Some(i);
                 }
-                let is_selected = self.selected.as_ref() == Some(&block.path)
-                    && block.is_dir;
+                let is_selected =
+                    self.selected.as_ref() == Some(&block.path) && block.is_dir;
 
-                let mut color = if block.is_dir { color_for(i) } else { Color32::from_gray(150) };
+                let mut color = if block.is_dir {
+                    color_for(i)
+                } else {
+                    Color32::from_gray(150)
+                };
                 if is_hover {
                     color = color.gamma_multiply(1.15);
                 }
@@ -75,22 +94,59 @@ impl MacDirViewsApp {
                     painter.rect_stroke(inner, 2.0, Stroke::new(3.0_f32, Color32::WHITE));
                 }
 
-                // Etichetta solo se c'e' abbastanza spazio, ritagliata sul blocco.
-                if w > 60.0 {
+                // Etichetta solo se c'e' abbastanza spazio.
+                let min_label_w = 50.0;
+                let min_label_h = 30.0;
+                if inner.width() > min_label_w && inner.height() > min_label_h {
                     let clipped = painter.with_clip_rect(inner);
+
+                    // Nome della cartella.
+                    let font_size = if inner.width() > 120.0 && inner.height() > 50.0 {
+                        13.0
+                    } else {
+                        11.0
+                    };
                     clipped.text(
                         inner.left_top() + egui::vec2(4.0, 4.0),
                         Align2::LEFT_TOP,
                         &block.label,
-                        FontId::proportional(13.0),
+                        FontId::proportional(font_size),
                         Color32::BLACK,
                     );
+
+                    // Dimensione.
+                    if inner.height() > 40.0 {
+                        clipped.text(
+                            inner.left_top() + egui::vec2(4.0, 4.0 + font_size + 4.0),
+                            Align2::LEFT_TOP,
+                            fmt_size(block.size),
+                            FontId::proportional(font_size - 1.0),
+                            Color32::from_black_alpha(200),
+                        );
+                    }
+
+                    // Percentuale.
+                    if inner.width() > 80.0 && inner.height() > 55.0 {
+                        let pct = block.size as f64 * 100.0 / total as f64;
+                        clipped.text(
+                            inner.left_top()
+                                + egui::vec2(4.0, 4.0 + font_size + 4.0 + font_size),
+                            Align2::LEFT_TOP,
+                            format!("{:.1}%", pct),
+                            FontId::proportional(font_size - 2.0),
+                            Color32::from_black_alpha(160),
+                        );
+                    }
+                } else if inner.width() > 25.0 && inner.height() > 15.0 {
+                    // Micro-label: solo le iniziali.
+                    let short: String = block.label.chars().take(3).collect();
+                    let clipped = painter.with_clip_rect(inner);
                     clipped.text(
-                        inner.left_top() + egui::vec2(4.0, 22.0),
-                        Align2::LEFT_TOP,
-                        fmt_size(block.size),
-                        FontId::proportional(12.0),
-                        Color32::from_black_alpha(200),
+                        inner.center(),
+                        Align2::CENTER_CENTER,
+                        short,
+                        FontId::proportional(9.0),
+                        Color32::from_black_alpha(180),
                     );
                 }
             }
@@ -98,7 +154,11 @@ impl MacDirViewsApp {
             painter.text(
                 rect.center(),
                 Align2::CENTER_CENTER,
-                if scanning { "Scansione in corso..." } else { "Premi \"Start Scan\" per iniziare" },
+                if scanning {
+                    "Scansione in corso..."
+                } else {
+                    "Premi \"Start Scan\" o trascina una cartella per iniziare"
+                },
                 FontId::proportional(16.0),
                 Color32::GRAY,
             );
@@ -138,14 +198,26 @@ impl MacDirViewsApp {
         ui.horizontal(|ui| {
             // Senza selezione si apre la cartella che si sta visualizzando.
             let can_open = self.selected.is_some() || !self.view_dir.as_os_str().is_empty();
-            if ui.add_enabled(can_open, egui::Button::new("Open in Finder")).clicked() {
+            if ui
+                .add_enabled(can_open, egui::Button::new("Open in Finder"))
+                .clicked()
+            {
                 open_path = self.selected.clone().or_else(|| Some(self.view_dir.clone()));
             }
             match hovered {
                 Some(i) => {
                     let b = &self.blocks[i];
-                    let pct = if total > 0 { b.size as f64 * 100.0 / total as f64 } else { 0.0 };
-                    ui.label(format!("{}  -  {} ({:.1}%)", b.path.display(), fmt_size(b.size), pct));
+                    let pct = if total > 0 {
+                        b.size as f64 * 100.0 / total as f64
+                    } else {
+                        0.0
+                    };
+                    ui.label(format!(
+                        "{}  -  {} ({:.1}%)",
+                        b.path.display(),
+                        fmt_size(b.size),
+                        pct
+                    ));
                 }
                 None => match &self.selected {
                     Some(p) => {

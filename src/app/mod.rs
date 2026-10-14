@@ -3,23 +3,25 @@
 
 mod actions;
 mod block;
+pub mod squarify;
 mod ui;
 mod update;
 
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use crate::scanner::{DirTree, FileInfo};
 use crate::system::process::is_root;
 use block::Block;
 
 pub struct MacDirViewsApp {
     path_input: String,
     scanning: Arc<Mutex<bool>>,
-    sizes: Arc<Mutex<HashMap<PathBuf, u64>>>,
+    tree: Arc<Mutex<DirTree>>,
     files_counter: Arc<AtomicU64>,
+    cancel_flag: Arc<AtomicBool>,
 
     scan_root: PathBuf,
     view_dir: PathBuf,
@@ -28,6 +30,13 @@ pub struct MacDirViewsApp {
     top10: Vec<(PathBuf, u64)>,
     blocks: Vec<Block>,
     total_size: u64,
+
+    // Top file piu' grandi.
+    top_files: Vec<FileInfo>,
+
+    // Cartelle saltate.
+    skipped_dirs: u64,
+    skipped_messages: Vec<String>,
 
     selected: Option<PathBuf>,
     status: Option<String>,
@@ -47,6 +56,10 @@ pub struct MacDirViewsApp {
     ctx_target: Option<PathBuf>,
     pending_delete: Option<(PathBuf, bool)>,
     delete_result: Arc<Mutex<Option<(PathBuf, Result<(), String>)>>>,
+
+    // Ricerca e filtri.
+    search_query: String,
+    filter_min_size_mb: f32,
 }
 
 impl Default for MacDirViewsApp {
@@ -54,13 +67,17 @@ impl Default for MacDirViewsApp {
         Self {
             path_input: String::new(),
             scanning: Arc::new(Mutex::new(false)),
-            sizes: Arc::new(Mutex::new(HashMap::new())),
+            tree: Arc::new(Mutex::new(DirTree::new(PathBuf::new()))),
             files_counter: Arc::new(AtomicU64::new(0)),
+            cancel_flag: Arc::new(AtomicBool::new(false)),
             scan_root: PathBuf::new(),
             view_dir: PathBuf::new(),
             top10: Vec::new(),
             blocks: Vec::new(),
             total_size: 0,
+            top_files: Vec::new(),
+            skipped_dirs: 0,
+            skipped_messages: Vec::new(),
             selected: None,
             status: None,
             was_scanning: false,
@@ -72,6 +89,8 @@ impl Default for MacDirViewsApp {
             ctx_target: None,
             pending_delete: None,
             delete_result: Arc::new(Mutex::new(None)),
+            search_query: String::new(),
+            filter_min_size_mb: 0.0,
         }
     }
 }

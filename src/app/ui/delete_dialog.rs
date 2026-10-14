@@ -11,7 +11,7 @@ impl MacDirViewsApp {
         let Some((path, permanent)) = self.pending_delete.clone() else {
             return;
         };
-        let size = self.sizes.lock().unwrap().get(&path).copied().unwrap_or(0);
+        let size = self.tree.lock().unwrap().size_of(&path);
         let mut confirm = false;
         let mut cancel = false;
         egui::Window::new("Conferma eliminazione")

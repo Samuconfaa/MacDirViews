@@ -2,7 +2,8 @@
 
 use std::path::PathBuf;
 
-/// Un blocco della treemap.
+/// Un blocco della treemap (usato nell'algoritmo squarified).
+#[derive(Clone)]
 pub struct Block {
     pub path: PathBuf,
     pub label: String,
