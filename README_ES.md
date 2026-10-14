@@ -38,6 +38,41 @@ MacDirViews proporciona una vista gráfica intuitiva e interactiva del uso de al
 
 ---
 
+## Instalación y Descarga
+
+### Paquetes Precompilados (.dmg / .app)
+
+**No es necesario compilar el código fuente.** Las imágenes de disco `.dmg` y los paquetes `.app` listos para usar se publican en cada versión:
+
+1. Descargue la última versión de **MacDirViews** desde [GitHub Releases](https://github.com/Samuconfaa/MacDirViews/releases).
+2. Abra el archivo `.dmg` y arrastre **MacDirViews** a la carpeta de **Aplicaciones** (`/Applications`).
+
+> [!NOTE]
+> Si macOS Gatekeeper bloquea la apertura de una versión no firmada descargada desde la web, haga clic derecho sobre la aplicación → **Abrir**, o ejecute el siguiente comando en la Terminal:
+> ```bash
+> xattr -cr /Applications/MacDirViews.app
+> ```
+
+### Compilación desde el Código Fuente (Opcional)
+
+Si prefiere compilar manualmente el proyecto:
+
+#### Requisitos
+- macOS 11.0 (Big Sur) o posterior
+- Apple Silicon (M1/M2/M3/M4) o Intel x86_64
+- Toolchain de Rust (`cargo`) y Xcode Command Line Tools
+
+```bash
+# Ejecutar directamente
+cargo run --release
+
+# Generar el paquete .app
+cargo install cargo-bundle
+cargo bundle --release
+```
+
+---
+
 ## Permisos de macOS (Acceso Total al Disco)
 
 macOS restringe el acceso a carpetas con datos personales del usuario (como Mail, Mensajes, historial de Safari y fototecas) mediante el sistema de seguridad TCC (Transparency, Consent, and Control).
@@ -52,49 +87,6 @@ Para permitir que MacDirViews analice todo el disco de arranque sin errores de p
 
 ---
 
-## Instalación y Compilación
-
-### Requisitos
-- macOS 11.0 (Big Sur) o posterior
-- Apple Silicon (M1/M2/M3/M4) o Intel x86_64
-- Toolchain de Rust (`cargo`) y Xcode Command Line Tools
-
-### Ejecutar desde el Código Fuente
-
-```bash
-cargo run --release
-```
-
-### Crear el Paquete de Aplicación macOS (.app)
-
-1. Instale la herramienta de empaquetado:
-   ```bash
-   cargo install cargo-bundle
-   ```
-
-2. Genere el paquete `.app`:
-   ```bash
-   cargo bundle --release
-   ```
-
-   El archivo de la aplicación se encontrará en:
-   ```
-   target/release/bundle/osx/MacDirViews.app
-   ```
-
-3. Cópielo a la carpeta de Aplicaciones:
-   ```bash
-   cp -R target/release/bundle/osx/MacDirViews.app /Applications/
-   ```
-
-> [!NOTE]
-> Si macOS Gatekeeper bloquea el binario local no firmado en el primer inicio, retire el atributo de cuarentena desde la terminal:
-> ```bash
-> xattr -cr /Applications/MacDirViews.app
-> ```
-
----
-
 ## Licencia
 
-Distribuido bajo los términos especificados en el repositorio.
+Distribuido bajo los términos de la licencia [Apache 2.0](LICENSE).

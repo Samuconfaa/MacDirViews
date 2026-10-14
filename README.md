@@ -38,6 +38,41 @@ MacDirViews provides an intuitive, interactive graphical overview of your disk u
 
 ---
 
+## Installation & Download
+
+### Pre-Built Binaries (.dmg / .app)
+
+You do **not** need to compile the code yourself. Ready-to-use `.dmg` disk images and `.app` bundles are published for each version:
+
+1. Download the latest `.dmg` or `.app` from [GitHub Releases](https://github.com/Samuconfaa/MacDirViews/releases).
+2. Open the `.dmg` and drag **MacDirViews** into your `/Applications` folder.
+
+> [!NOTE]
+> If macOS Gatekeeper blocks an unsigned locally-downloaded build upon initial launch, right-click the app and choose **Open**, or run the following command in Terminal:
+> ```bash
+> xattr -cr /Applications/MacDirViews.app
+> ```
+
+### Building from Source (Optional)
+
+If you prefer to compile from source:
+
+#### Prerequisites
+- macOS 11.0 (Big Sur) or later
+- Apple Silicon (M1/M2/M3/M4) or Intel x86_64
+- Rust toolchain (`cargo`) and Xcode Command Line Tools
+
+```bash
+# Run directly
+cargo run --release
+
+# Or build a standalone .app bundle
+cargo install cargo-bundle
+cargo bundle --release
+```
+
+---
+
 ## macOS Permissions (Full Disk Access)
 
 macOS restricts access to sensitive user data (such as Mail, Messages, Safari history, and Photo libraries) via its Transparency, Consent, and Control (TCC) system.
@@ -52,49 +87,6 @@ To allow MacDirViews to scan the entire startup disk without encountering permis
 
 ---
 
-## Installation & Build
-
-### Requirements
-- macOS 11.0 (Big Sur) or later
-- Apple Silicon (M1/M2/M3/M4) or Intel x86_64
-- Rust toolchain (`cargo`) and Xcode Command Line Tools
-
-### Run from Source
-
-```bash
-cargo run --release
-```
-
-### Build a Standalone macOS App (`.app`)
-
-1. Install the packaging tool:
-   ```bash
-   cargo install cargo-bundle
-   ```
-
-2. Generate the `.app` bundle:
-   ```bash
-   cargo bundle --release
-   ```
-
-   The application bundle will be created at:
-   ```
-   target/release/bundle/osx/MacDirViews.app
-   ```
-
-3. Copy it to your Applications folder:
-   ```bash
-   cp -R target/release/bundle/osx/MacDirViews.app /Applications/
-   ```
-
-> [!NOTE]
-> If macOS Gatekeeper blocks an unsigned locally-built binary on first launch, remove the quarantine attribute:
-> ```bash
-> xattr -cr /Applications/MacDirViews.app
-> ```
-
----
-
 ## License
 
-Distributed under the terms specified in the repository.
+This project is licensed under the [Apache License 2.0](LICENSE).

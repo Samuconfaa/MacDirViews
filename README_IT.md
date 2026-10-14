@@ -38,6 +38,41 @@ MacDirViews offre una rappresentazione grafica immediata e interattiva dello spa
 
 ---
 
+## Installazione e Download
+
+### Pacchetti Pronti all'Uso (.dmg / .app)
+
+**Non è necessario compilare il codice sorgente.** I file binari precompilati in formato `.dmg` e `.app` sono disponibili e scaricabili per ogni release:
+
+1. Scarica l'ultima versione di **MacDirViews** da [GitHub Releases](https://github.com/Samuconfaa/MacDirViews/releases).
+2. Apri il file `.dmg` e trascina **MacDirViews** nella cartella **Applicazioni** (`/Applications`).
+
+> [!NOTE]
+> Se macOS Gatekeeper impedisce l'avvio della versione non firmata scaricata dal web, fai clic destro sull'app → **Apri**, oppure rimuovi l'attributo di quarantena da terminale:
+> ```bash
+> xattr -cr /Applications/MacDirViews.app
+> ```
+
+### Compilazione dal Codice Sorgente (Opzionale)
+
+Se preferisci compilare autonomamente il progetto:
+
+#### Requisiti
+- macOS 11.0 (Big Sur) o versioni successive
+- Apple Silicon (M1/M2/M3/M4) o Intel x86_64
+- Toolchain Rust (`cargo`) e Xcode Command Line Tools
+
+```bash
+# Esecuzione diretta
+cargo run --release
+
+# Creazione del pacchetto .app
+cargo install cargo-bundle
+cargo bundle --release
+```
+
+---
+
 ## Permessi macOS (Accesso Completo al Disco)
 
 macOS protegge i dati personali dell'utente (come Mail, Messaggi, cronologia Safari e librerie Foto) tramite il framework di sicurezza TCC (Transparency, Consent, and Control).
@@ -52,49 +87,6 @@ Per consentire a MacDirViews di analizzare l'intero disco di avvio senza errori 
 
 ---
 
-## Installazione e Compilazione
-
-### Requisiti
-- macOS 11.0 (Big Sur) o versioni successive
-- Apple Silicon (M1/M2/M3/M4) o Intel x86_64
-- Toolchain Rust (`cargo`) e Xcode Command Line Tools
-
-### Esecuzione da Codice Sorgente
-
-```bash
-cargo run --release
-```
-
-### Creazione del Bundle Applicativo (.app)
-
-1. Installa lo strumento di packaging:
-   ```bash
-   cargo install cargo-bundle
-   ```
-
-2. Genera il bundle `.app`:
-   ```bash
-   cargo bundle --release
-   ```
-
-   Il file applicativo sarà disponibile in:
-   ```
-   target/release/bundle/osx/MacDirViews.app
-   ```
-
-3. Sposta l'applicazione nella cartella `/Applications`:
-   ```bash
-   cp -R target/release/bundle/osx/MacDirViews.app /Applications/
-   ```
-
-> [!NOTE]
-> Se al primo avvio macOS Gatekeeper blocca l'applicazione compilata localmente non firmata, rimuovi il flag di quarantena dal terminale:
-> ```bash
-> xattr -cr /Applications/MacDirViews.app
-> ```
-
----
-
 ## Licenza
 
-Distribuito secondo i termini specificati nel repository.
+Distribuito sotto i termini della licenza [Apache 2.0](LICENSE).

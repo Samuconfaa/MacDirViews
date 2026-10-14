@@ -38,6 +38,41 @@ MacDirViews предоставляет наглядное интерактивн
 
 ---
 
+## Установка и скачивание
+
+### Готовые сборки (.dmg / .app)
+
+**Компилировать исходный код не обязательно.** Готовые образы дисков `.dmg` и приложения `.app` публикуются для каждого релиза:
+
+1. Скачайте последнюю версию из раздела [GitHub Releases](https://github.com/Samuconfaa/MacDirViews/releases).
+2. Откройте файл `.dmg` и перетащите **MacDirViews** в папку «Программы» (`/Applications`).
+
+> [!NOTE]
+> Если при первом запуске macOS Gatekeeper заблокирует неподписанную сборку, нажмите по приложению правой кнопкой мыши → **Открыть**, либо снимите атрибут карантина в Терминале:
+> ```bash
+> xattr -cr /Applications/MacDirViews.app
+> ```
+
+### Сборка из исходного кода (Опционально)
+
+Если вы хотите собрать проект самостоятельно:
+
+#### Требования
+- macOS 11.0 (Big Sur) или новее
+- Apple Silicon (M1/M2/M3/M4) или Intel x86_64
+- Инструменты разработки Rust (`cargo`) и Xcode Command Line Tools
+
+```bash
+# Прямой запуск
+cargo run --release
+
+# Сборка пакета .app
+cargo install cargo-bundle
+cargo bundle --release
+```
+
+---
+
 ## Разрешения macOS (Полный доступ к диску)
 
 macOS защищает личные данные пользователя (такие как Почта, Сообщения, история Safari и медиатека Фото) с помощью системы TCC (Transparency, Consent, and Control).
@@ -52,49 +87,6 @@ macOS защищает личные данные пользователя (та�
 
 ---
 
-## Установка и сборка
-
-### Требования
-- macOS 11.0 (Big Sur) или новее
-- Apple Silicon (M1/M2/M3/M4) или Intel x86_64
-- Инструменты разработки Rust (`cargo`) и Xcode Command Line Tools
-
-### Запуск из исходного кода
-
-```bash
-cargo run --release
-```
-
-### Сборка приложения macOS (.app)
-
-1. Установите инструмент сборки пакетов:
-   ```bash
-   cargo install cargo-bundle
-   ```
-
-2. Соберите пакет `.app`:
-   ```bash
-   cargo bundle --release
-   ```
-
-   Готовое приложение появится по пути:
-   ```
-   target/release/bundle/osx/MacDirViews.app
-   ```
-
-3. Переместите приложение в папку «Программы»:
-   ```bash
-   cp -R target/release/bundle/osx/MacDirViews.app /Applications/
-   ```
-
-> [!NOTE]
-> Если при первом запуске macOS Gatekeeper заблокирует локально собранное неподписанное приложение, снимите флаг карантина в терминале:
-> ```bash
-> xattr -cr /Applications/MacDirViews.app
-> ```
-
----
-
 ## Лицензия
 
-Распространяется на условиях лицензии, указанной в репозитории.
+Распространяется на условиях лицензии [Apache 2.0](LICENSE).
