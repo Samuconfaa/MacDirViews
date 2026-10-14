@@ -35,7 +35,7 @@ impl MacDirViewsApp {
                             egui::Slider::new(&mut self.filter_min_size_mb, 0.0..=1024.0)
                                 .suffix(" MB")
                                 .logarithmic(true)
-                                .clamp_to_range(true),
+                                .clamping(egui::SliderClamping::Always),
                         );
                     });
                     let needs_refresh =

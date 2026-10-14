@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 /// Dalle dimensioni "dirette" (solo i file contenuti in ogni cartella) calcola
 /// le dimensioni cumulative, propagando ogni valore a tutte le cartelle antenate fino a `root`.
+#[allow(dead_code)]
 pub fn rollup(direct: &HashMap<PathBuf, u64>, root: &Path) -> HashMap<PathBuf, u64> {
     let mut out: HashMap<PathBuf, u64> = HashMap::with_capacity(direct.len());
     for (dir, &size) in direct {

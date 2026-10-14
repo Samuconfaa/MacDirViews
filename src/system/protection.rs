@@ -67,7 +67,6 @@ pub fn list_volumes() -> Vec<(String, std::path::PathBuf)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
     fn test_protected_system_volumes() {
