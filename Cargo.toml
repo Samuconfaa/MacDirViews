@@ -1,16 +1,17 @@
 [package]
-name = "MacDirViews"
+name = "macdirviews"
 version = "0.1.0"
 edition = "2021"
-description = "Clone moderno di WinDirStat per macOS: analizzatore di spazio disco con treemap"
 
 [dependencies]
-eframe = "0.28"
-egui = "0.28"
-jwalk = "0.8.1"
-dirs-next = "2.0.0"
+eframe = "0.29"
+jwalk = "0.8"
+dirs-next = "2"
 
-[profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
+# Per creare il bundle macOS (MacDirViews.app) con l'icona nel Dock/Finder:
+#   cargo install cargo-bundle && cargo bundle --release
+# Per il Dock serve un file .icns: aggiungilo in assets/ e mettilo in `icon`.
+[package.metadata.bundle]
+name = "MacDirViews"
+identifier = "com.macdirviews.app"
+icon = ["assets/icon.png"]

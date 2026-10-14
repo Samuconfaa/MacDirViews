@@ -1,0 +1,92 @@
+MacDirViews - COME GENERARE L'ICONA PER IL .APP (macOS)
+=======================================================
+
+Ci sono due icone diverse, e servono entrambe:
+
+  - assets/icon.png   -> icona della FINESTRA (incorporata nel codice con
+                         include_bytes!, vale anche con "cargo run")
+  - assets/icon.icns  -> icona del .APP nel Dock e nel Finder (serve il bundle)
+
+Parti da una sola immagine sorgente e ricavi tutto da quella.
+
+
+1) PREPARA L'IMMAGINE SORGENTE
+------------------------------
+- Formato PNG, QUADRATO, almeno 1024 x 1024 pixel.
+- Sfondo trasparente consigliato (macOS non arrotonda gli angoli da solo:
+  se vuoi l'angolo arrotondato in stile macOS, disegnalo nell'immagine).
+- Salvala come: icon_1024.png
+
+Copia anche una versione 512x512 come icona della finestra:
+
+    sips -z 512 512 icon_1024.png --out assets/icon.png
+
+
+2) GENERA IL FILE .ICNS
+-----------------------
+Da Terminale, nella cartella dove si trova icon_1024.png:
+
+    mkdir MacDirViews.iconset
+
+    sips -z 16 16     icon_1024.png --out MacDirViews.iconset/icon_16x16.png
+    sips -z 32 32     icon_1024.png --out MacDirViews.iconset/icon_16x16@2x.png
+    sips -z 32 32     icon_1024.png --out MacDirViews.iconset/icon_32x32.png
+    sips -z 64 64     icon_1024.png --out MacDirViews.iconset/icon_32x32@2x.png
+    sips -z 128 128   icon_1024.png --out MacDirViews.iconset/icon_128x128.png
+    sips -z 256 256   icon_1024.png --out MacDirViews.iconset/icon_128x128@2x.png
+    sips -z 256 256   icon_1024.png --out MacDirViews.iconset/icon_256x256.png
+    sips -z 512 512   icon_1024.png --out MacDirViews.iconset/icon_256x256@2x.png
+    sips -z 512 512   icon_1024.png --out MacDirViews.iconset/icon_512x512.png
+    cp icon_1024.png  MacDirViews.iconset/icon_512x512@2x.png
+
+    iconutil -c icns MacDirViews.iconset -o assets/icon.icns
+
+Importante: i nomi dei file dentro la cartella .iconset devono essere
+ESATTAMENTE quelli sopra, altrimenti iconutil da errore.
+"sips" e "iconutil" sono gia' presenti in macOS, non serve installare nulla.
+
+
+3) COLLEGA L'ICONA AL BUNDLE
+----------------------------
+Nel Cargo.toml modifica la sezione del bundle:
+
+    [package.metadata.bundle]
+    name = "MacDirViews"
+    identifier = "com.macdirviews.app"
+    icon = ["assets/icon.icns"]
+
+
+4) CREA IL .APP
+---------------
+    cargo install cargo-bundle        (solo la prima volta)
+    cargo bundle --release
+
+Il risultato e' qui:
+
+    target/release/bundle/osx/MacDirViews.app
+
+Trascinalo in /Applicazioni oppure aprilo con doppio clic.
+
+
+5) SE L'ICONA NON CAMBIA
+------------------------
+macOS mette le icone in cache. Prova in ordine:
+
+    touch target/release/bundle/osx/MacDirViews.app
+    killall Dock
+    killall Finder
+
+Se ancora non cambia, sposta il .app in un'altra cartella e riaprilo.
+
+
+6) NOTE UTILI
+-------------
+- Il .app non e' firmato: la prima volta macOS potrebbe bloccarlo.
+  Soluzione: tasto destro sul .app -> Apri -> Apri. Oppure da Terminale:
+
+      xattr -cr target/release/bundle/osx/MacDirViews.app
+
+- Se cambi assets/icon.png devi ricompilare (viene incorporato nell'eseguibile).
+- Se cambi solo icon.icns basta rifare "cargo bundle --release".
+- Senza bundle (cargo run) il Dock mostra l'icona generica: e' normale,
+  l'icona del Dock appare solo dal .app.

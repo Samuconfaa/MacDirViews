@@ -1,0 +1,188 @@
+//! Pannello centrale: navigazione, treemap, informazioni e pulsante Finder.
+
+use std::path::PathBuf;
+use std::sync::atomic::Ordering;
+
+use eframe::egui;
+use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke};
+
+use super::folder_menu::folder_menu;
+use crate::app::MacDirViewsApp;
+use crate::utils::color::color_for;
+use crate::utils::format::fmt_size;
+
+impl MacDirViewsApp {
+    pub(in crate::app) fn central_ui(&mut self, ui: &mut egui::Ui, scanning: bool) {
+        // --- Barra di navigazione ---
+        self.nav_bar_ui(ui);
+
+        if scanning {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(format!(
+                    "Scansione in corso... {} file analizzati",
+                    self.files_counter.load(Ordering::Relaxed)
+                ));
+            });
+        } else if self.total_size > 0 {
+            ui.label(format!("Totale scansionato: {}", fmt_size(self.total_size)));
+        }
+        if let Some(msg) = &self.status {
+            ui.colored_label(Color32::LIGHT_RED, msg);
+        }
+
+        ui.add_space(4.0);
+
+        // --- Treemap orizzontale ---
+        let avail = ui.available_size();
+        let size = egui::vec2(avail.x.max(50.0), (avail.y - 80.0).max(100.0));
+        let (response, painter) = ui.allocate_painter(size, egui::Sense::click());
+        let rect = response.rect;
+
+        painter.rect_filled(rect, 0.0, Color32::from_gray(30));
+
+        let total: u64 = self.blocks.iter().map(|b| b.size).sum();
+        let pointer: Option<Pos2> = response.hover_pos();
+        let mut hovered: Option<usize> = None;
+
+        if total > 0 {
+            let n = self.blocks.len();
+            let mut x = rect.left();
+            for (i, block) in self.blocks.iter().enumerate() {
+                // Larghezza proporzionale alla dimensione; l'ultimo blocco chiude lo spazio.
+                let w = if i + 1 == n {
+                    (rect.right() - x).max(0.0)
+                } else {
+                    rect.width() * (block.size as f32 / total as f32)
+                };
+                let r = Rect::from_min_size(Pos2::new(x, rect.top()), egui::vec2(w, rect.height()));
+                x += w;
+
+                let is_hover = pointer.map_or(false, |p| r.contains(p));
+                if is_hover {
+                    hovered = Some(i);
+                }
+                let is_selected = self.selected.as_ref() == Some(&block.path)
+                    && block.is_dir;
+
+                let mut color = if block.is_dir { color_for(i) } else { Color32::from_gray(150) };
+                if is_hover {
+                    color = color.gamma_multiply(1.15);
+                }
+                let inner = r.shrink(1.0);
+                painter.rect_filled(inner, 2.0, color);
+                if is_selected {
+                    painter.rect_stroke(inner, 2.0, Stroke::new(3.0_f32, Color32::WHITE));
+                }
+
+                // Etichetta solo se c'e' abbastanza spazio, ritagliata sul blocco.
+                if w > 60.0 {
+                    let clipped = painter.with_clip_rect(inner);
+                    clipped.text(
+                        inner.left_top() + egui::vec2(4.0, 4.0),
+                        Align2::LEFT_TOP,
+                        &block.label,
+                        FontId::proportional(13.0),
+                        Color32::BLACK,
+                    );
+                    clipped.text(
+                        inner.left_top() + egui::vec2(4.0, 22.0),
+                        Align2::LEFT_TOP,
+                        fmt_size(block.size),
+                        FontId::proportional(12.0),
+                        Color32::from_black_alpha(200),
+                    );
+                }
+            }
+        } else {
+            painter.text(
+                rect.center(),
+                Align2::CENTER_CENTER,
+                if scanning { "Scansione in corso..." } else { "Premi \"Start Scan\" per iniziare" },
+                FontId::proportional(16.0),
+                Color32::GRAY,
+            );
+        }
+
+        // Tasto destro: seleziona il blocco sotto il mouse e lo usa per il menu contestuale.
+        if response.secondary_clicked() {
+            self.ctx_target = hovered.and_then(|i| {
+                let b = &self.blocks[i];
+                if b.is_dir {
+                    Some(b.path.clone())
+                } else {
+                    None
+                }
+            });
+            if let Some(p) = self.ctx_target.clone() {
+                self.selected = Some(p);
+            }
+        }
+
+        // Click = seleziona, doppio click = entra nella cartella.
+        let mut new_view: Option<PathBuf> = None;
+        if let Some(i) = hovered {
+            let block = &self.blocks[i];
+            if response.clicked() {
+                self.selected = Some(block.path.clone());
+            }
+            if response.double_clicked() && block.is_dir {
+                new_view = Some(block.path.clone());
+            }
+        }
+
+        // --- Pannello informazioni (hover / selezione) ---
+        ui.add_space(6.0);
+        ui.separator();
+        let mut open_path: Option<PathBuf> = None;
+        ui.horizontal(|ui| {
+            // Senza selezione si apre la cartella che si sta visualizzando.
+            let can_open = self.selected.is_some() || !self.view_dir.as_os_str().is_empty();
+            if ui.add_enabled(can_open, egui::Button::new("Open in Finder")).clicked() {
+                open_path = self.selected.clone().or_else(|| Some(self.view_dir.clone()));
+            }
+            match hovered {
+                Some(i) => {
+                    let b = &self.blocks[i];
+                    let pct = if total > 0 { b.size as f64 * 100.0 / total as f64 } else { 0.0 };
+                    ui.label(format!("{}  -  {} ({:.1}%)", b.path.display(), fmt_size(b.size), pct));
+                }
+                None => match &self.selected {
+                    Some(p) => {
+                        ui.label(format!("Selezionato: {}", p.display()));
+                    }
+                    None => {
+                        ui.label("Clic = seleziona, doppio clic = entra nella cartella.");
+                    }
+                },
+            }
+        });
+
+        // Menu contestuale (tasto destro) sulla treemap.
+        let can_modify = !scanning;
+        let mut del_req: Option<(PathBuf, bool)> = None;
+        response.context_menu(|ui| match self.ctx_target.clone() {
+            Some(p) => folder_menu(ui, &p, can_modify, &mut open_path, &mut del_req),
+            None => {
+                ui.label("Nessuna cartella qui.");
+            }
+        });
+        if let Some(d) = del_req {
+            self.pending_delete = Some(d);
+        }
+
+        // Tooltip che segue il mouse con percorso completo e dimensione.
+        if let Some(i) = hovered {
+            let b = &self.blocks[i];
+            let tip = format!("{}\n{}", b.path.display(), fmt_size(b.size));
+            response.on_hover_text(tip);
+        }
+
+        if let Some(p) = open_path {
+            self.open_in_finder(&p);
+        }
+        if let Some(dir) = new_view {
+            self.navigate_to(dir);
+        }
+    }
+}
