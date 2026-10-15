@@ -7,7 +7,9 @@
 //! - Classifica dei file piu' grandi.
 //! - Struttura ad albero incrementale (niente piu' rollup completo a ogni secondo).
 
+#[cfg(unix)]
 use std::collections::HashSet;
+#[cfg(unix)]
 use std::os::unix::fs::MetadataExt; // per blocks(), dev(), ino(), nlink()
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -37,6 +39,7 @@ pub fn scan_directory(
     let mut local_tree = DirTree::new(root.clone());
 
     // Set di (dev, ino) per la deduplicazione hard link / cloni APFS.
+    #[cfg(unix)]
     let mut seen_inodes: HashSet<(u64, u64)> = HashSet::new();
 
     let walker = WalkDir::new(&root)
@@ -92,6 +95,7 @@ pub fn scan_directory(
 
         // Deduplicazione hard link / cloni APFS:
         // Se il file ha piu' di un nome (nlink > 1), controlliamo se l'abbiamo gia' visto.
+        #[cfg(unix)]
         if meta.nlink() > 1 {
             let key = (meta.dev(), meta.ino());
             if !seen_inodes.insert(key) {
@@ -99,8 +103,11 @@ pub fn scan_directory(
             }
         }
 
-        // Spazio realmente allocato su disco (blocchi da 512 byte).
+        // Spazio realmente allocato su disco (blocchi da 512 byte su Unix/macOS, altrimenti len()).
+        #[cfg(unix)]
         let size = meta.blocks() * 512;
+        #[cfg(not(unix))]
+        let size = meta.len();
 
         let path = entry.path();
         if let Some(parent) = path.parent() {
