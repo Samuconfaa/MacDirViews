@@ -105,8 +105,6 @@ impl MacDirViewsApp {
             return;
         }
 
-        let is_selected_path = self.selected.as_ref() == Some(&path.to_path_buf());
-
         for (name, child_path, size) in children {
             let is_expanded = self.expanded_tree_nodes.contains(&child_path);
             let is_sel = self.selected.as_ref() == Some(&child_path);

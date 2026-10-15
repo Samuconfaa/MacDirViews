@@ -112,7 +112,7 @@ impl MacDirViewsApp {
 
             ui.add_space(4.0);
 
-            // --- Barra di stato della memoria disco (Disk Usage Bar) ---
+            let mut do_refresh_disk = false;
             if let Some(ref usage) = self.disk_usage {
                 let ratio = (usage.used_bytes as f64 / usage.total_bytes.max(1) as f64) as f32;
                 let pct = ratio * 100.0;
@@ -130,14 +130,18 @@ impl MacDirViewsApp {
                     ui.add(bar);
 
                     if ui.small_button("🔄").on_hover_text("Aggiorna spazio disco").clicked() {
-                        self.refresh_disk_usage(ctx);
+                        do_refresh_disk = true;
                     }
                 });
             } else {
                 // Tenta di caricare le informazioni sul disco se non presenti
                 if self.last_disk_refresh.elapsed() >= std::time::Duration::from_secs(10) {
-                    self.refresh_disk_usage(ctx);
+                    do_refresh_disk = true;
                 }
+            }
+
+            if do_refresh_disk {
+                self.refresh_disk_usage(ctx);
             }
 
             ui.add_space(2.0);

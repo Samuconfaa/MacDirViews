@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use eframe::egui;
-use egui::Color32;
 
 use super::folder_menu::folder_menu;
 use crate::app::{AgingFilter, MacDirViewsApp};
