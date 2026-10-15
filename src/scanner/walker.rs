@@ -109,7 +109,8 @@ pub fn scan_directory(
 
         // Classifica file piu' grandi.
         if size > 0 {
-            local_tree.add_top_file(path.clone(), size, MAX_TOP_FILES);
+            let modified = meta.modified().ok();
+            local_tree.add_top_file(path.clone(), size, modified, MAX_TOP_FILES);
         }
 
         seen += 1;

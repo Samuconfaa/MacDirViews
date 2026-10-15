@@ -1,17 +1,19 @@
-//! Azioni dell'applicazione: scansione, navigazione, eliminazione, avvio come admin.
+//! Azioni dell'applicazione: scansione, navigazione, eliminazione, sincronizzazione live,
+//! strumenti per file duplicati, junk cleaner e spazio su disco.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use eframe::egui;
 
 use super::block::Block;
 use super::MacDirViewsApp;
 use crate::constants::MAX_BLOCKS;
-use crate::scanner::{scan_directory, DirTree};
+use crate::scanner::{find_duplicates, scan_developer_and_system_junk, scan_directory, DirTree};
+use crate::system::disk::get_disk_usage;
 use crate::system::finder::{move_to_trash, reveal_in_finder};
 use crate::system::protection::is_deletion_forbidden;
 
@@ -20,7 +22,6 @@ impl MacDirViewsApp {
     pub(super) fn start_scan(&mut self, ctx: &egui::Context) {
         let input = self.path_input.trim().to_string();
 
-        // Percorso vuoto -> cartella Home; supporto base per "~".
         let root = if input.is_empty() {
             match dirs_next::home_dir() {
                 Some(home) => home,
@@ -65,7 +66,9 @@ impl MacDirViewsApp {
         *self.scanning.lock().unwrap() = true;
         self.last_refresh = Instant::now();
 
-        // Cloni per il thread.
+        // Aggiorna lo spazio su disco
+        self.refresh_disk_usage(ctx);
+
         let scanning = Arc::clone(&self.scanning);
         let tree = Arc::clone(&self.tree);
         let counter = Arc::clone(&self.files_counter);
@@ -89,18 +92,80 @@ impl MacDirViewsApp {
         }
     }
 
+    /// Ricarica in background le metriche di capienza del disco per il volume corrente.
+    pub(super) fn refresh_disk_usage(&mut self, ctx: &egui::Context) {
+        let path = if self.view_dir.as_os_str().is_empty() {
+            self.scan_root.clone()
+        } else {
+            self.view_dir.clone()
+        };
+        let res_arc = Arc::clone(&self.disk_usage_result);
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let usage = get_disk_usage(&path);
+            *res_arc.lock().unwrap() = usage;
+            ctx.request_repaint();
+        });
+        self.last_disk_refresh = Instant::now();
+    }
+
+    /// Avvia lo scanner per junk e cache in background.
+    pub(super) fn start_junk_scan(&mut self, ctx: &egui::Context) {
+        if *self.junk_scanning.lock().unwrap() {
+            return;
+        }
+        *self.junk_scanning.lock().unwrap() = true;
+        let root = if self.scan_root.as_os_str().is_empty() {
+            None
+        } else {
+            Some(self.scan_root.clone())
+        };
+        let result_arc = Arc::clone(&self.junk_result);
+        let scanning_arc = Arc::clone(&self.junk_scanning);
+        let ctx = ctx.clone();
+
+        std::thread::spawn(move || {
+            let items = scan_developer_and_system_junk(root.as_deref());
+            *result_arc.lock().unwrap() = Some(items);
+            *scanning_arc.lock().unwrap() = false;
+            ctx.request_repaint();
+        });
+    }
+
+    /// Avvia la ricerca di file duplicati in background.
+    pub(super) fn start_duplicate_scan(&mut self, ctx: &egui::Context) {
+        if *self.duplicates_scanning.lock().unwrap() {
+            return;
+        }
+        *self.duplicates_scanning.lock().unwrap() = true;
+        self.duplicates_cancel.store(false, Ordering::Relaxed);
+
+        let root = if self.view_dir.as_os_str().is_empty() {
+            dirs_next::home_dir().unwrap_or_else(|| PathBuf::from("/"))
+        } else {
+            self.view_dir.clone()
+        };
+        let result_arc = Arc::clone(&self.duplicates_result);
+        let scanning_arc = Arc::clone(&self.duplicates_scanning);
+        let cancel = Arc::clone(&self.duplicates_cancel);
+        let ctx = ctx.clone();
+
+        std::thread::spawn(move || {
+            // Cerca duplicati con dimensione >= 250 KB
+            let groups = find_duplicates(&root, 250 * 1024, &cancel);
+            *result_arc.lock().unwrap() = Some(groups);
+            *scanning_arc.lock().unwrap() = false;
+            ctx.request_repaint();
+        });
+    }
+
     /// Ricalcola top-10 e blocchi della treemap dall'albero condiviso.
-    /// Il mutex viene rilasciato esplicitamente PRIMA di toccare qualsiasi altro campo.
     pub(super) fn refresh(&mut self) {
         let view = self.view_dir.clone();
 
         let guard = self.tree.lock().unwrap();
-
-        // Dimensione totale della scansione.
         let root_size = guard.total_size();
 
-        // Top 10 delle cartelle contenute (a qualsiasi profondita') nella cartella
-        // in cui si sta navigando, esclusa la cartella stessa.
         let mut all_descendants = guard.all_descendants(&view);
         if all_descendants.len() > 10 {
             all_descendants.select_nth_unstable_by(10, |a, b| b.1.cmp(&a.1));
@@ -109,16 +174,13 @@ impl MacDirViewsApp {
         all_descendants.sort_by(|a, b| b.1.cmp(&a.1));
         let top10 = all_descendants;
 
-        // Figli diretti della cartella visualizzata.
         let children_data = guard.children_of(&view);
         let view_size = guard.size_of(&view);
 
-        // Top file e cartelle saltate.
         let top_files = guard.top_files.clone();
         let skipped_dirs = guard.skipped_dirs;
         let skipped_messages = guard.skipped_messages.clone();
 
-        // Lock rilasciato qui: da ora si lavora solo su copie locali.
         drop(guard);
 
         let children_sum: u64 = children_data.iter().map(|c| c.2).sum();
@@ -131,14 +193,12 @@ impl MacDirViewsApp {
             if size == 0 {
                 continue;
             }
-            // Applica il filtro soglia minima.
             let min_bytes = (self.filter_min_size_mb as u64) * 1024 * 1024;
             if min_bytes > 0 && size < min_bytes {
                 rest_size += size;
                 rest_count += 1;
                 continue;
             }
-            // Applica il filtro ricerca.
             if !self.search_query.is_empty() {
                 let label = path
                     .file_name()
@@ -193,6 +253,60 @@ impl MacDirViewsApp {
         self.last_refresh = Instant::now();
     }
 
+    /// Controlla in tempo reale se file o cartelle mostrati sono stati eliminati
+    /// (anche dall'esterno dell'app nel Finder o Terminale).
+    pub(super) fn sync_filesystem_changes(&mut self, ctx: &egui::Context) {
+        if *self.scanning.lock().unwrap() || self.scan_root.as_os_str().is_empty() {
+            return;
+        }
+
+        let mut deleted_paths = Vec::new();
+
+        // 1. Controlla se la cartella attualmente visualizzata esiste ancora
+        if !self.view_dir.as_os_str().is_empty() && !self.view_dir.exists() {
+            let mut parent = self.view_dir.parent();
+            while let Some(p) = parent {
+                if p.exists() {
+                    self.view_dir = p.to_path_buf();
+                    self.refresh();
+                    return;
+                }
+                parent = p.parent();
+            }
+            self.view_dir = self.scan_root.clone();
+            self.refresh();
+            return;
+        }
+
+        // 2. Controlla i blocchi attualmente visibili
+        for block in &self.blocks {
+            if block.is_dir && !block.path.exists() {
+                deleted_paths.push(block.path.clone());
+            }
+        }
+
+        // 3. Controlla l'elemento selezionato
+        if let Some(ref sel) = self.selected {
+            if !sel.exists() {
+                deleted_paths.push(sel.clone());
+            }
+        }
+
+        // 4. Controlla i top file
+        for file in &self.top_files {
+            if !file.path.exists() {
+                deleted_paths.push(file.path.clone());
+            }
+        }
+
+        // 5. Controlla se ci sono elementi eliminati
+        if !deleted_paths.is_empty() {
+            for p in deleted_paths {
+                self.apply_deletion(&p, ctx);
+            }
+        }
+    }
+
     /// Naviga in una cartella registrando la posizione corrente nella cronologia.
     pub(super) fn navigate_to(&mut self, dir: PathBuf) {
         if dir == self.view_dir {
@@ -226,8 +340,7 @@ impl MacDirViewsApp {
         }
     }
 
-    /// Rilancia l'app con permessi di amministratore (richiede la password di macOS)
-    /// e chiude l'istanza corrente solo se l'avvio riesce.
+    /// Rilancia l'app con permessi di amministratore (richiede password macOS).
     pub(super) fn relaunch_as_admin(&mut self, ctx: &egui::Context) {
         let exe = match std::env::current_exe() {
             Ok(e) => e.to_string_lossy().to_string(),
@@ -268,10 +381,10 @@ impl MacDirViewsApp {
         });
     }
 
-    /// Avvia l'eliminazione in un thread (Cestino oppure definitiva).
+    /// Avvia l'eliminazione in un thread (Cestino oppure definitiva per cartelle e singoli file).
     pub(super) fn start_delete(&mut self, ctx: &egui::Context, path: PathBuf, permanent: bool) {
         if is_deletion_forbidden(&path) {
-            self.status = Some(format!("Cartella protetta, non eliminabile: {}", path.display()));
+            self.status = Some(format!("Percorso protetto, non eliminabile: {}", path.display()));
             return;
         }
         self.status = Some(format!("Eliminazione in corso: {}", path.display()));
@@ -280,7 +393,11 @@ impl MacDirViewsApp {
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let res = if permanent {
-                std::fs::remove_dir_all(&path).map_err(|e| e.to_string())
+                if path.is_file() {
+                    std::fs::remove_file(&path).map_err(|e| e.to_string())
+                } else {
+                    std::fs::remove_dir_all(&path).map_err(|e| e.to_string())
+                }
             } else {
                 move_to_trash(&path, is_admin)
             };
@@ -289,9 +406,9 @@ impl MacDirViewsApp {
         });
     }
 
-    /// Dopo un'eliminazione riuscita aggiorna dimensioni, navigazione e treemap
-    /// senza dover rifare la scansione.
-    pub(super) fn apply_deletion(&mut self, path: &Path) {
+    /// Dopo un'eliminazione riuscita aggiorna dimensioni, navigazione, liste e treemap
+    /// in tempo reale senza dover rieseguire la scansione.
+    pub(super) fn apply_deletion(&mut self, path: &Path, ctx: &egui::Context) {
         {
             let mut tree = self.tree.lock().unwrap();
             tree.remove(path);
@@ -301,7 +418,7 @@ impl MacDirViewsApp {
         if self
             .selected
             .as_ref()
-            .map_or(false, |s| s.starts_with(path))
+            .map_or(false, |s| s == path || s.starts_with(path))
         {
             self.selected = None;
         }
@@ -310,7 +427,20 @@ impl MacDirViewsApp {
                 self.view_dir = parent.to_path_buf();
             }
         }
+
+        // Rimuovi anche da Junk Cleaner se presente
+        self.junk_items.retain(|item| !item.path.starts_with(path));
+
+        // Rimuovi anche da File Duplicati se presente
+        for group in &mut self.duplicate_groups {
+            group.files.retain(|f| f != path && !f.starts_with(path));
+            let count = group.files.len() as u64;
+            group.wasted_bytes = count.saturating_sub(1) * group.size;
+        }
+        self.duplicate_groups.retain(|g| g.files.len() >= 2);
+
         self.refresh();
+        self.refresh_disk_usage(ctx);
     }
 
     /// Apre il percorso selezionato nel Finder di macOS.

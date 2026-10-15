@@ -1,4 +1,5 @@
-//! Pannello centrale: navigazione, treemap squarified, informazioni e pulsante Finder.
+//! Pannello centrale: modalità di visualizzazione (Treemap, Albero, Split View),
+//! navigazione a breadcrumbs, informazioni e menu contestuale.
 
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -8,25 +9,23 @@ use egui::{Align2, Color32, FontId, Pos2, Stroke};
 
 use super::folder_menu::folder_menu;
 use crate::app::squarify::{squarify, TreemapItem};
-use crate::app::MacDirViewsApp;
+use crate::app::{MacDirViewsApp, ViewMode};
 use crate::utils::color::color_for;
 use crate::utils::format::fmt_size;
 
 impl MacDirViewsApp {
     pub(in crate::app) fn central_ui(&mut self, ui: &mut egui::Ui, scanning: bool) {
-        // --- Barra di navigazione ---
+        // --- Barra di navigazione (Breadcrumbs interattivi) ---
         self.nav_bar_ui(ui);
 
-        if scanning {
-            ui.horizontal(|ui| {
+        ui.horizontal(|ui| {
+            if scanning {
                 ui.spinner();
                 ui.label(format!(
                     "Scansione in corso... {} file analizzati",
                     self.files_counter.load(Ordering::Relaxed)
                 ));
-            });
-        } else if self.total_size > 0 {
-            ui.horizontal(|ui| {
+            } else if self.total_size > 0 {
                 ui.label(format!("Totale scansionato: {}", fmt_size(self.total_size)));
                 if self.skipped_dirs > 0 {
                     ui.colored_label(
@@ -34,17 +33,56 @@ impl MacDirViewsApp {
                         format!(" ({} cartelle non leggibili)", self.skipped_dirs),
                     );
                 }
+            }
+
+            // Selettore Vista: Treemap, Albero, Split View
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.selectable_value(&mut self.view_mode, ViewMode::Split, "🔀 Split View");
+                ui.selectable_value(&mut self.view_mode, ViewMode::Tree, "🌲 Albero");
+                ui.selectable_value(&mut self.view_mode, ViewMode::Treemap, "🗺 Treemap");
+                ui.label("Modalità:");
             });
-        }
+        });
+
         if let Some(msg) = &self.status {
             ui.colored_label(Color32::LIGHT_RED, msg);
         }
 
         ui.add_space(4.0);
 
-        // --- Treemap Squarified ---
+        // Rendering in base alla modalità selezionata
+        match self.view_mode {
+            ViewMode::Treemap => {
+                let avail = ui.available_size();
+                let height = (avail.y - 45.0).max(120.0);
+                self.render_treemap(ui, scanning, height);
+            }
+            ViewMode::Tree => {
+                self.tree_view_ui(ui, scanning);
+            }
+            ViewMode::Split => {
+                let avail = ui.available_size();
+                let half_height = ((avail.y - 60.0) * 0.48).max(120.0);
+
+                // Metà superiore: Albero gerarchico
+                ui.group(|ui| {
+                    ui.set_height(half_height);
+                    self.tree_view_ui(ui, scanning);
+                });
+
+                ui.separator();
+
+                // Metà inferiore: Treemap interattiva
+                let remaining = ui.available_size().y - 45.0;
+                self.render_treemap(ui, scanning, remaining.max(120.0));
+            }
+        }
+    }
+
+    /// Disegna la Treemap Squarified con painter nativo e gestisce click/hover.
+    fn render_treemap(&mut self, ui: &mut egui::Ui, scanning: bool, height: f32) {
         let avail = ui.available_size();
-        let size = egui::vec2(avail.x.max(50.0), (avail.y - 80.0).max(100.0));
+        let size = egui::vec2(avail.x.max(50.0), height);
         let (response, painter) = ui.allocate_painter(size, egui::Sense::click());
         let rect = response.rect;
 
@@ -55,7 +93,6 @@ impl MacDirViewsApp {
         let mut hovered: Option<usize> = None;
 
         if total > 0 {
-            // Prepara gli elementi per l'algoritmo squarified.
             let items: Vec<TreemapItem> = self
                 .blocks
                 .iter()
@@ -77,8 +114,7 @@ impl MacDirViewsApp {
                 if is_hover {
                     hovered = Some(i);
                 }
-                let is_selected =
-                    self.selected.as_ref() == Some(&block.path) && block.is_dir;
+                let is_selected = self.selected.as_ref() == Some(&block.path) && block.is_dir;
 
                 let mut color = if block.is_dir {
                     color_for(i)
@@ -94,13 +130,11 @@ impl MacDirViewsApp {
                     painter.rect_stroke(inner, 2.0, Stroke::new(3.0_f32, Color32::WHITE));
                 }
 
-                // Etichetta solo se c'e' abbastanza spazio.
+                // Etichetta testuale
                 let min_label_w = 50.0;
                 let min_label_h = 30.0;
                 if inner.width() > min_label_w && inner.height() > min_label_h {
                     let clipped = painter.with_clip_rect(inner);
-
-                    // Nome della cartella.
                     let font_size = if inner.width() > 120.0 && inner.height() > 50.0 {
                         13.0
                     } else {
@@ -114,7 +148,6 @@ impl MacDirViewsApp {
                         Color32::BLACK,
                     );
 
-                    // Dimensione.
                     if inner.height() > 40.0 {
                         clipped.text(
                             inner.left_top() + egui::vec2(4.0, 4.0 + font_size + 4.0),
@@ -125,12 +158,10 @@ impl MacDirViewsApp {
                         );
                     }
 
-                    // Percentuale.
                     if inner.width() > 80.0 && inner.height() > 55.0 {
                         let pct = block.size as f64 * 100.0 / total as f64;
                         clipped.text(
-                            inner.left_top()
-                                + egui::vec2(4.0, 4.0 + font_size + 4.0 + font_size),
+                            inner.left_top() + egui::vec2(4.0, 4.0 + font_size + 4.0 + font_size),
                             Align2::LEFT_TOP,
                             format!("{:.1}%", pct),
                             FontId::proportional(font_size - 2.0),
@@ -138,7 +169,6 @@ impl MacDirViewsApp {
                         );
                     }
                 } else if inner.width() > 25.0 && inner.height() > 15.0 {
-                    // Micro-label: solo le iniziali.
                     let short: String = block.label.chars().take(3).collect();
                     let clipped = painter.with_clip_rect(inner);
                     clipped.text(
@@ -164,7 +194,7 @@ impl MacDirViewsApp {
             );
         }
 
-        // Tasto destro: seleziona il blocco sotto il mouse e lo usa per il menu contestuale.
+        // Tasto destro: seleziona il blocco sotto il mouse
         if response.secondary_clicked() {
             self.ctx_target = hovered.and_then(|i| {
                 let b = &self.blocks[i];
@@ -179,7 +209,7 @@ impl MacDirViewsApp {
             }
         }
 
-        // Click = seleziona, doppio click = entra nella cartella.
+        // Click = seleziona, doppio click = naviga
         let mut new_view: Option<PathBuf> = None;
         if let Some(i) = hovered {
             let block = &self.blocks[i];
@@ -191,15 +221,14 @@ impl MacDirViewsApp {
             }
         }
 
-        // --- Pannello informazioni (hover / selezione) ---
-        ui.add_space(6.0);
+        // Pannello informazioni in basso
+        ui.add_space(4.0);
         ui.separator();
         let mut open_path: Option<PathBuf> = None;
         ui.horizontal(|ui| {
-            // Senza selezione si apre la cartella che si sta visualizzando.
             let can_open = self.selected.is_some() || !self.view_dir.as_os_str().is_empty();
             if ui
-                .add_enabled(can_open, egui::Button::new("Open in Finder"))
+                .add_enabled(can_open, egui::Button::new("Apri nel Finder"))
                 .clicked()
             {
                 open_path = self.selected.clone().or_else(|| Some(self.view_dir.clone()));
@@ -230,7 +259,7 @@ impl MacDirViewsApp {
             }
         });
 
-        // Menu contestuale (tasto destro) sulla treemap.
+        // Menu contestuale (tasto destro)
         let can_modify = !scanning;
         let mut del_req: Option<(PathBuf, bool)> = None;
         response.context_menu(|ui| match self.ctx_target.clone() {
@@ -243,7 +272,6 @@ impl MacDirViewsApp {
             self.pending_delete = Some(d);
         }
 
-        // Tooltip che segue il mouse con percorso completo e dimensione.
         if let Some(i) = hovered {
             let b = &self.blocks[i];
             let tip = format!("{}\n{}", b.path.display(), fmt_size(b.size));

@@ -6,12 +6,14 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
-/// Informazioni su un singolo file (per la classifica Top N file).
+/// Informazioni su un singolo file (per la classifica Top N file e filtri).
 #[derive(Clone, Debug)]
 pub struct FileInfo {
     pub path: PathBuf,
     pub size: u64,
+    pub modified: Option<SystemTime>,
 }
 
 /// Nodo dell'albero: una directory con la sua dimensione.
@@ -62,13 +64,11 @@ impl DirTree {
     /// Aggiunge la dimensione di un file alla directory `parent_dir`.
     /// Aggiorna ricorsivamente la dimensione cumulativa di tutti gli antenati.
     pub fn add_file(&mut self, parent_dir: &Path, file_size: u64) {
-        // Calcola il percorso relativo rispetto alla root.
         let rel = match parent_dir.strip_prefix(&self.root_path) {
             Ok(r) => r.to_path_buf(),
             Err(_) => return,
         };
 
-        // Naviga/crea i nodi lungo il percorso.
         let mut node = &mut self.root;
         node.cumulative_size += file_size;
 
@@ -81,9 +81,19 @@ impl DirTree {
     }
 
     /// Aggiunge un file alla classifica top files (mantiene solo i top N).
-    pub fn add_top_file(&mut self, path: PathBuf, size: u64, max_top: usize) {
+    pub fn add_top_file(
+        &mut self,
+        path: PathBuf,
+        size: u64,
+        modified: Option<SystemTime>,
+        max_top: usize,
+    ) {
         if self.top_files.len() < max_top {
-            self.top_files.push(FileInfo { path, size });
+            self.top_files.push(FileInfo {
+                path,
+                size,
+                modified,
+            });
             if self.top_files.len() == max_top {
                 self.top_files.sort_by(|a, b| b.size.cmp(&a.size));
             }
@@ -94,7 +104,14 @@ impl DirTree {
                     .top_files
                     .binary_search_by(|f| f.size.cmp(&size).reverse())
                     .unwrap_or_else(|p| p);
-                self.top_files.insert(pos, FileInfo { path, size });
+                self.top_files.insert(
+                    pos,
+                    FileInfo {
+                        path,
+                        size,
+                        modified,
+                    },
+                );
             }
         }
     }
@@ -167,8 +184,18 @@ impl DirTree {
         }
     }
 
-    /// Rimuove un percorso dall'albero e aggiorna le dimensioni degli antenati.
+    /// Rimuove un percorso (cartella O file singolo) dall'albero e aggiorna
+    /// le dimensioni degli antenati e i top_files.
     pub fn remove(&mut self, abs_path: &Path) {
+        // Rimuovi da top_files (sia file esatto che se abs_path era una cartella contenitrice)
+        let mut file_size_hint = None;
+        if let Some(pos) = self.top_files.iter().position(|f| f.path == abs_path) {
+            file_size_hint = Some(self.top_files[pos].size);
+            self.top_files.remove(pos);
+        } else {
+            self.top_files.retain(|f| !f.path.starts_with(abs_path));
+        }
+
         let rel = match abs_path.strip_prefix(&self.root_path) {
             Ok(r) => r.to_path_buf(),
             Err(_) => return,
@@ -183,29 +210,47 @@ impl DirTree {
             return;
         }
 
-        // Trova la dimensione del nodo da rimuovere.
-        let removed_size = self.size_of(abs_path);
-        if removed_size == 0 && self.get_node(abs_path).is_none() {
-            return;
-        }
+        let is_dir_node = self.get_node(abs_path).is_some();
+        if is_dir_node {
+            let removed_size = self.size_of(abs_path);
+            let mut node = &mut self.root;
+            node.cumulative_size = node.cumulative_size.saturating_sub(removed_size);
 
-        // Rimuovi il nodo e aggiorna gli antenati.
-        let mut node = &mut self.root;
-        node.cumulative_size = node.cumulative_size.saturating_sub(removed_size);
-
-        for (i, name) in components.iter().enumerate() {
-            if i + 1 == components.len() {
-                // Siamo al genitore: rimuoviamo il figlio.
-                node.children.remove(name);
-                return;
-            }
-            match node.children.get_mut(name) {
-                Some(child) => {
+            for (i, name) in components.iter().enumerate() {
+                if i + 1 == components.len() {
+                    node.children.remove(name);
+                    return;
+                }
+                if let Some(child) = node.children.get_mut(name) {
                     child.cumulative_size =
                         child.cumulative_size.saturating_sub(removed_size);
                     node = child;
+                } else {
+                    return;
                 }
-                None => return,
+            }
+        } else {
+            // È un file singolo: sottrai la sua dimensione dagli antenati
+            let file_size = file_size_hint.unwrap_or_else(|| {
+                std::fs::metadata(abs_path).map(|m| m.len()).unwrap_or(0)
+            });
+            if file_size > 0 {
+                let mut node = &mut self.root;
+                node.cumulative_size = node.cumulative_size.saturating_sub(file_size);
+
+                for (i, name) in components.iter().enumerate() {
+                    if i + 1 == components.len() {
+                        node.direct_size = node.direct_size.saturating_sub(file_size);
+                        return;
+                    }
+                    if let Some(child) = node.children.get_mut(name) {
+                        child.cumulative_size =
+                            child.cumulative_size.saturating_sub(file_size);
+                        node = child;
+                    } else {
+                        return;
+                    }
+                }
             }
         }
     }
@@ -234,7 +279,6 @@ mod tests {
         tree.add_file(Path::new("/root/a/c"), 50);
         let children = tree.children_of(Path::new("/root"));
         assert_eq!(children.len(), 2);
-        // Ordinati per dimensione: b (300) prima di a (150).
         assert_eq!(children[0].0, "b");
         assert_eq!(children[0].2, 300);
         assert_eq!(children[1].0, "a");
@@ -252,7 +296,6 @@ mod tests {
         tree.remove(Path::new("/root/a"));
         assert_eq!(tree.total_size(), 200);
         assert!(tree.get_node(Path::new("/root/a")).is_none());
-        // b ancora presente.
         assert_eq!(tree.size_of(Path::new("/root/b")), 200);
     }
 
@@ -260,10 +303,14 @@ mod tests {
     fn test_top_files() {
         let mut tree = DirTree::new(PathBuf::from("/root"));
         for i in 0..20 {
-            tree.add_top_file(PathBuf::from(format!("/root/file{}", i)), i * 10, 10);
+            tree.add_top_file(
+                PathBuf::from(format!("/root/file{}", i)),
+                i * 10,
+                None,
+                10,
+            );
         }
         assert_eq!(tree.top_files.len(), 10);
-        // Il primo deve essere il più grande.
         assert_eq!(tree.top_files[0].size, 190);
         assert_eq!(tree.top_files[9].size, 100);
     }

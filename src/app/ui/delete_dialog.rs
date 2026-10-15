@@ -1,4 +1,4 @@
-//! Finestra di conferma eliminazione.
+//! Finestra di conferma eliminazione per cartelle e file.
 
 use eframe::egui;
 use egui::Color32;
@@ -11,9 +11,20 @@ impl MacDirViewsApp {
         let Some((path, permanent)) = self.pending_delete.clone() else {
             return;
         };
-        let size = self.tree.lock().unwrap().size_of(&path);
+
+        let size = {
+            let s = self.tree.lock().unwrap().size_of(&path);
+            if s > 0 {
+                s
+            } else {
+                std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+            }
+        };
+
+        let is_file = path.is_file();
         let mut confirm = false;
         let mut cancel = false;
+
         egui::Window::new("Conferma eliminazione")
             .collapsible(false)
             .resizable(false)
@@ -28,11 +39,16 @@ impl MacDirViewsApp {
                         "ATTENZIONE: eliminazione definitiva, non si puo' annullare.",
                     );
                 } else {
-                    ui.label("La cartella verra' spostata nel Cestino.");
+                    let item_desc = if is_file { "Il file" } else { "La cartella" };
+                    ui.label(format!("{} verra' spostato nel Cestino.", item_desc));
                 }
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    let label = if permanent { "Elimina definitivamente" } else { "Sposta nel Cestino" };
+                    let label = if permanent {
+                        "Elimina definitivamente"
+                    } else {
+                        "Sposta nel Cestino"
+                    };
                     if ui.button(label).clicked() {
                         confirm = true;
                     }
@@ -41,6 +57,7 @@ impl MacDirViewsApp {
                     }
                 });
             });
+
         if confirm {
             self.pending_delete = None;
             self.start_delete(ctx, path, permanent);
