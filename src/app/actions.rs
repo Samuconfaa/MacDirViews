@@ -12,7 +12,7 @@ use eframe::egui;
 use super::block::Block;
 use super::DirTreeViewApp;
 use crate::constants::MAX_BLOCKS;
-use crate::scanner::{find_duplicates, scan_developer_and_system_junk, scan_directory_shallow, DirTree};
+use crate::scanner::{find_duplicates, scan_developer_and_system_junk, scan_directory, DirTree};
 use crate::system::disk::get_disk_usage;
 use crate::system::finder::{move_to_trash, reveal_in_finder};
 use crate::system::protection::is_deletion_forbidden;
@@ -71,12 +71,6 @@ impl DirTreeViewApp {
         // Aggiorna lo spazio su disco
         self.refresh_disk_usage(ctx);
 
-        self.start_shallow_scan(root, ctx);
-    }
-
-    pub(super) fn start_shallow_scan(&mut self, path: PathBuf, ctx: &egui::Context) {
-        if *self.scanning.lock().unwrap() { return; }
-        self.cancel_flag.store(false, Ordering::Relaxed);
         *self.scanning.lock().unwrap() = true;
         let tree = Arc::clone(&self.tree);
         let counter = Arc::clone(&self.files_counter);
@@ -86,9 +80,8 @@ impl DirTreeViewApp {
         completed.store(false, Ordering::Relaxed);
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            scan_directory_shallow(path, tree, counter, cancel);
+            scan_directory(root, scanning, tree, counter, cancel, ctx.clone());
             completed.store(true, Ordering::Release);
-            *scanning.lock().unwrap() = false;
             ctx.request_repaint();
         });
     }

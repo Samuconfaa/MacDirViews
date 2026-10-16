@@ -21,72 +21,11 @@ use std::os::unix::fs::MetadataExt;
 use crossbeam_channel::{unbounded, RecvTimeoutError};
 use eframe::egui;
 
-use super::tree::{DirTree, FileInfo, ShallowDirectory};
+use super::tree::{DirTree, FileInfo};
 use crate::system::protection::{is_protected_directory, is_protected_name};
 
 /// Numero massimo di file nella classifica "Top N file".
 const MAX_TOP_FILES: usize = 20;
-
-pub fn scan_directory_shallow(
-    dir: PathBuf,
-    tree: Arc<Mutex<DirTree>>,
-    files_counter: Arc<AtomicU64>,
-    cancel_flag: Arc<AtomicBool>,
-) {
-    let (root_result, mut count) = read_directory_level(&dir);
-    let children: Vec<PathBuf> = root_result.child_names.iter().map(|name| dir.join(name)).collect();
-    let mut results = vec![root_result];
-    for child in children {
-        if cancel_flag.load(Ordering::Relaxed) { break; }
-        let (result, files) = read_directory_level(&child);
-        count += files;
-        results.push(result);
-    }
-    files_counter.fetch_add(count, Ordering::Relaxed);
-    if !cancel_flag.load(Ordering::Relaxed) {
-        tree.lock().unwrap().update_shallow_batch(results);
-    }
-}
-
-fn read_directory_level(dir: &std::path::Path) -> (ShallowDirectory, u64) {
-    let mut direct_size = 0u64;
-    let mut child_names = Vec::new();
-    let mut top_files = Vec::new();
-    let mut count = 0u64;
-    #[cfg(unix)]
-    let mut seen_inodes = HashSet::new();
-
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let Ok(file_type) = entry.file_type() else { continue };
-            if file_type.is_symlink() { continue; }
-            if file_type.is_dir() {
-                let name = entry.file_name();
-                if !is_protected_name(&name) && !is_protected_directory(&entry.path()) {
-                    child_names.push(name.to_string_lossy().into_owned());
-                }
-            } else if file_type.is_file() {
-                let Ok(meta) = entry.metadata() else { continue };
-                #[cfg(unix)]
-                if meta.nlink() > 1 && !seen_inodes.insert((meta.dev(), meta.ino())) { continue; }
-                #[cfg(unix)]
-                let size = meta.blocks() * 512;
-                #[cfg(not(unix))]
-                let size = meta.len();
-                direct_size += size;
-                count += 1;
-                if size > 0 && (top_files.len() < MAX_TOP_FILES
-                    || top_files.last().is_some_and(|file: &FileInfo| size > file.size))
-                {
-                    top_files.push(FileInfo { path: entry.path(), size, modified: meta.modified().ok() });
-                    top_files.sort_by(|a, b| b.size.cmp(&a.size));
-                    top_files.truncate(MAX_TOP_FILES);
-                }
-            }
-        }
-    }
-    (ShallowDirectory { path: dir.to_path_buf(), direct_size, child_names, top_files }, count)
-}
 
 /// Risultato della scansione di una cartella.
 #[allow(dead_code)]
@@ -110,8 +49,8 @@ pub fn scan_directory(
     #[cfg(unix)]
     let seen_inodes: Arc<Mutex<HashSet<(u64, u64)>>> = Arc::new(Mutex::new(HashSet::new()));
 
-    // Soglia minima per considerare un file tra i Top 20 (in byte).
-    let min_top_threshold = Arc::new(AtomicU64::new(0));
+    // Ogni worker mantiene la propria Top 20 e la fonde una sola volta a fine
+    // lavoro: evitare un mutex per ogni file candidato riduce molto la contesa.
     let top_files_shared: Arc<Mutex<Vec<FileInfo>>> = Arc::new(Mutex::new(Vec::new()));
     let skipped_dirs_shared: Arc<Mutex<Vec<(PathBuf, String)>>> = Arc::new(Mutex::new(Vec::new()));
 
@@ -136,7 +75,6 @@ pub fn scan_directory(
         let pending_w = Arc::clone(&pending_dirs);
         let cancel_w = Arc::clone(&cancel_flag);
         let files_counter_w = Arc::clone(&files_counter);
-        let min_top_w = Arc::clone(&min_top_threshold);
         let top_files_w = Arc::clone(&top_files_shared);
         let skipped_w = Arc::clone(&skipped_dirs_shared);
 
@@ -145,6 +83,7 @@ pub fn scan_directory(
 
         let handle = std::thread::spawn(move || {
             let mut local_file_acc = 0u64;
+            let mut local_top_files: Vec<FileInfo> = Vec::with_capacity(MAX_TOP_FILES);
 
             while !cancel_w.load(Ordering::Relaxed) {
                 let dir = match rx_dirs_w.recv_timeout(Duration::from_millis(20)) {
@@ -227,35 +166,22 @@ pub fn scan_directory(
                         dir_size += size;
                         local_file_acc += 1;
 
-                        if size > 0 && size > min_top_w.load(Ordering::Relaxed) {
+                        if size > 0
+                            && (local_top_files.len() < MAX_TOP_FILES
+                                || local_top_files.last().is_some_and(|f| size > f.size))
+                        {
                             let path = entry.path();
                             let modified = meta.modified().ok();
-                            let mut top = top_files_w.lock().unwrap();
-                            if top.len() < MAX_TOP_FILES {
-                                top.push(FileInfo { path, size, modified });
-                                if top.len() == MAX_TOP_FILES {
-                                    top.sort_by(|a, b| b.size.cmp(&a.size));
-                                    min_top_w.store(top.last().map(|f| f.size).unwrap_or(0), Ordering::Relaxed);
-                                }
-                            } else if let Some(last) = top.last() {
-                                if size > last.size {
-                                    top.pop();
-                                    let pos = top.binary_search_by(|f| f.size.cmp(&size).reverse()).unwrap_or_else(|p| p);
-                                    top.insert(pos, FileInfo { path, size, modified });
-                                    min_top_w.store(top.last().map(|f| f.size).unwrap_or(0), Ordering::Relaxed);
-                                }
-                            }
+                            local_top_files.push(FileInfo { path, size, modified });
+                            local_top_files.sort_by(|a, b| b.size.cmp(&a.size));
+                            local_top_files.truncate(MAX_TOP_FILES);
                         }
                     }
                 }
 
-                // Invia i risultati aggregati della cartella solo se ha file diretti
-                if dir_size > 0 {
-                    let _ = tx_results_w.send(DirBatch {
-                        path: dir,
-                        direct_size: dir_size,
-                    });
-                }
+                // Pubblica anche directory vuote: servono per rappresentare tutto
+                // l'albero, non soltanto le cartelle che contengono file.
+                let _ = tx_results_w.send(DirBatch { path: dir, direct_size: dir_size });
 
                 // Aggiungi le sottocartelle trovate
                 let num_new = new_subdirs.len();
@@ -281,6 +207,7 @@ pub fn scan_directory(
             if local_file_acc > 0 {
                 files_counter_w.fetch_add(local_file_acc, Ordering::Relaxed);
             }
+            top_files_w.lock().unwrap().extend(local_top_files);
         });
         worker_handles.push(handle);
     }
@@ -318,6 +245,8 @@ pub fn scan_directory(
         let top = top_files_shared.lock().unwrap();
         local_tree.top_files = top.clone();
     }
+    local_tree.top_files.sort_by(|a, b| b.size.cmp(&a.size));
+    local_tree.top_files.truncate(MAX_TOP_FILES);
     {
         let sk = skipped_dirs_shared.lock().unwrap();
         local_tree.skipped_dirs = sk.len() as u64;

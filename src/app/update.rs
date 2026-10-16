@@ -72,20 +72,6 @@ impl eframe::App for DirTreeViewApp {
         }
         self.was_scanning = scanning;
 
-        if !scanning && !self.cancel_flag.load(std::sync::atomic::Ordering::Relaxed)
-            && !self.scan_root.as_os_str().is_empty()
-        {
-            let next_scan = {
-                let tree = self.tree.lock().unwrap();
-                if tree.needs_shallow_scan(&self.view_dir) {
-                    Some(self.view_dir.clone())
-                } else {
-                    self.expanded_tree_nodes.iter().find(|path| !tree.is_scanned(path)).cloned()
-                }
-            };
-            if let Some(path) = next_scan { self.start_shallow_scan(path, ctx); }
-        }
-
         // Pannelli dell'interfaccia
         self.top_bar_ui(ctx, scanning);
         if self.left_panel_open { self.side_panel_ui(ctx, scanning); }

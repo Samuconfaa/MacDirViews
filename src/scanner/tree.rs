@@ -4,7 +4,7 @@
 //! dimensione diretta (file propri) e la dimensione cumulativa (inclusi figli).
 //! Questo evita di ricalcolare tutto con `rollup` a ogni aggiornamento.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -14,13 +14,6 @@ pub struct FileInfo {
     pub path: PathBuf,
     pub size: u64,
     pub modified: Option<SystemTime>,
-}
-
-pub struct ShallowDirectory {
-    pub path: PathBuf,
-    pub direct_size: u64,
-    pub child_names: Vec<String>,
-    pub top_files: Vec<FileInfo>,
 }
 
 /// Nodo dell'albero: una directory con la sua dimensione.
@@ -112,6 +105,7 @@ impl DirTree {
             }
         }
         node.direct_size += dir_size;
+        node.scanned = true;
     }
 
     /// Rebuilds cumulative sizes in one post-order pass.
@@ -126,39 +120,8 @@ impl DirTree {
         sum(&mut self.root);
     }
 
-    pub fn update_shallow_batch(&mut self, directories: Vec<ShallowDirectory>) {
-        for directory in directories {
-            let Ok(rel) = directory.path.strip_prefix(&self.root_path) else { continue };
-            let mut node = &mut self.root;
-            for component in rel.components() {
-                if let std::path::Component::Normal(c) = component {
-                    let name = c.to_string_lossy().into_owned();
-                    node = node.children.entry(name).or_insert_with(DirNode::new);
-                }
-            }
-            node.direct_size = directory.direct_size;
-            node.scanned = true;
-            let names: HashSet<&str> = directory.child_names.iter().map(String::as_str).collect();
-            node.children.retain(|name, _| names.contains(name.as_str()));
-            for name in directory.child_names {
-                node.children.entry(name).or_insert_with(DirNode::new);
-            }
-            self.top_files.extend(directory.top_files);
-        }
-        self.top_files.sort_by(|a, b| b.size.cmp(&a.size));
-        self.top_files.dedup_by(|a, b| a.path == b.path);
-        self.top_files.truncate(20);
-        self.rebuild_cumulative_sizes();
-    }
-
     pub fn is_scanned(&self, abs_path: &Path) -> bool {
         self.get_node(abs_path).map(|node| node.scanned).unwrap_or(false)
-    }
-
-    pub fn needs_shallow_scan(&self, abs_path: &Path) -> bool {
-        self.get_node(abs_path)
-            .map(|node| !node.scanned || node.children.values().any(|child| !child.scanned))
-            .unwrap_or(true)
     }
 
     pub fn is_shallow_complete(&self, abs_path: &Path) -> bool {
