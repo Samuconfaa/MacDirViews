@@ -8,6 +8,7 @@ use eframe::egui;
 
 use super::folder_menu::folder_menu;
 use crate::app::{AgingFilter, MacDirViewsApp};
+use crate::system::finder::open_in_file_manager_label;
 use crate::system::protection::is_deletion_forbidden;
 use crate::utils::format::fmt_size;
 
@@ -228,11 +229,11 @@ impl MacDirViewsApp {
                             clicked_path = Some(file_info.path.clone());
                         }
 
-                        // Menu contestuale per aprire nel Finder o eliminare il singolo file
+                        // Menu contestuale per aprire nel file manager o eliminare il singolo file
                         resp.context_menu(|ui| {
                             ui.label(file_info.path.display().to_string());
                             ui.separator();
-                            if ui.button("Apri nel Finder").clicked() {
+                            if ui.button(open_in_file_manager_label()).clicked() {
                                 side_open = Some(file_info.path.clone());
                                 ui.close_menu();
                             }

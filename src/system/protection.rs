@@ -29,10 +29,19 @@ pub fn is_protected_directory(path: &Path) -> bool {
                 || upper == "SYSTEM VOLUME INFORMATION"
                 || upper == "RECOVERY"
                 || upper == "$WINDOWS.~BT"
+                || upper == "$WINDOWS.~WS"
                 || upper == "$WINREAGENT"
+                || upper == "CONFIG.MSI"
             {
                 return true;
             }
+        }
+        // Evita loop di junction points / reparse points storici di Windows
+        let path_str = path.to_string_lossy().to_ascii_uppercase();
+        if path_str.ends_with(r"\APPLICATION DATA\APPLICATION DATA")
+            || (path_str.ends_with(r"\APPLICATION DATA") && path_str.contains(r"\APPDATA\LOCAL\APPLICATION DATA"))
+        {
+            return true;
         }
     }
 
@@ -67,19 +76,41 @@ pub fn is_deletion_forbidden(path: &Path) -> bool {
     {
         let path_str = path.to_string_lossy().to_ascii_uppercase();
         // Evita eliminazione di interi drive es. "C:\" o "C:"
-        if path_str.len() <= 3 && (path_str.ends_with(':') || path_str.ends_with(":\\")) {
+        if path_str.len() <= 3 && (path_str.ends_with(':') || path_str.ends_with(r":\")) {
             return true;
         }
         if let Some(win_dir) = std::env::var_os("WINDIR") {
-            let win_path = Path::new(&win_dir);
-            if path.starts_with(win_path) || win_path.starts_with(path) {
+            let win_str = win_dir.to_string_lossy().to_ascii_uppercase();
+            if path_str == win_str || path_str.starts_with(&format!(r"{win_str}\")) {
+                return true;
+            }
+        } else if path_str == r"C:\WINDOWS" || path_str.starts_with(r"C:\WINDOWS\") {
+            return true;
+        }
+        if let Some(prog_files) = std::env::var_os("ProgramFiles") {
+            let pf_str = prog_files.to_string_lossy().to_ascii_uppercase();
+            if path_str == pf_str || path_str.starts_with(&format!(r"{pf_str}\")) {
                 return true;
             }
         }
-        if let Some(prog_files) = std::env::var_os("ProgramFiles") {
-            let pf_path = Path::new(&prog_files);
-            if path == pf_path {
+        if let Some(prog_files_x86) = std::env::var_os("ProgramFiles(x86)") {
+            let pf_str = prog_files_x86.to_string_lossy().to_ascii_uppercase();
+            if path_str == pf_str || path_str.starts_with(&format!(r"{pf_str}\")) {
                 return true;
+            }
+        }
+        if let Some(prog_data) = std::env::var_os("ProgramData") {
+            let pd_str = prog_data.to_string_lossy().to_ascii_uppercase();
+            if path_str == pd_str || path_str.starts_with(&format!(r"{pd_str}\")) {
+                return true;
+            }
+        }
+        if let Some(home) = dirs_next::home_dir() {
+            if let Some(users_dir) = home.parent() {
+                let u_str = users_dir.to_string_lossy().to_ascii_uppercase();
+                if path_str == u_str {
+                    return true;
+                }
             }
         }
     }
@@ -122,7 +153,8 @@ pub fn list_volumes() -> Vec<(String, PathBuf)> {
             let letter = format!("{}:", c as char);
             let drive_path = PathBuf::from(format!("{}:\\", c as char));
             if drive_path.exists() {
-                volumes.push((letter, drive_path));
+                let display_name = format!("Unità ({letter})");
+                volumes.push((display_name, drive_path));
             }
         }
         volumes
@@ -134,11 +166,34 @@ pub fn list_volumes() -> Vec<(String, PathBuf)> {
     }
 }
 
+/// Restituisce la cartella radice predefinita per scansionare l'intero sistema.
+pub fn system_root_path() -> PathBuf {
+    #[cfg(windows)]
+    {
+        let sys_drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_string());
+        PathBuf::from(format!("{sys_drive}\\"))
+    }
+    #[cfg(not(windows))]
+    {
+        PathBuf::from("/")
+    }
+}
+
+/// Etichetta per il pulsante di scansione dell'intero sistema.
+pub fn scan_all_label() -> &'static str {
+    if cfg!(windows) {
+        "Scansiona tutto (C:\\)"
+    } else {
+        "Scansiona tutto (/)"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
+    #[cfg(unix)]
     fn test_protected_system_volumes() {
         assert!(is_protected_directory(Path::new("/System/Volumes")));
         assert!(is_protected_directory(Path::new("/dev")));
@@ -147,31 +202,35 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_not_protected() {
         assert!(!is_protected_directory(Path::new("/Users")));
         assert!(!is_protected_directory(Path::new("/tmp")));
         assert!(!is_protected_directory(Path::new("/Applications")));
-        // /Volumes non e' piu' protetto dalla scansione.
         assert!(!is_protected_directory(Path::new("/Volumes")));
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_deletion_forbidden_root() {
         assert!(is_deletion_forbidden(Path::new("/")));
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_deletion_forbidden_top_level() {
         assert!(is_deletion_forbidden(Path::new("/Applications")));
         assert!(is_deletion_forbidden(Path::new("/Users")));
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_deletion_forbidden_users() {
         assert!(is_deletion_forbidden(Path::new("/Users/confa")));
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_deletion_forbidden_system() {
         assert!(is_deletion_forbidden(Path::new("/System")));
         assert!(is_deletion_forbidden(Path::new("/System/Library")));
@@ -180,10 +239,35 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
+    fn test_protected_windows_directories() {
+        assert!(is_protected_directory(Path::new(r"C:\$Recycle.Bin")));
+        assert!(is_protected_directory(Path::new(r"C:\System Volume Information")));
+        assert!(is_protected_directory(Path::new(r"C:\Recovery")));
+        assert!(is_protected_directory(Path::new(r"C:\$WINDOWS.~BT")));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn test_not_protected_windows() {
+        assert!(!is_protected_directory(Path::new(r"C:\Users")));
+        assert!(!is_protected_directory(Path::new(r"C:\Temp")));
+        assert!(!is_protected_directory(Path::new(r"C:\Program Files")));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn test_deletion_forbidden_windows() {
+        assert!(is_deletion_forbidden(Path::new(r"C:\")));
+        assert!(is_deletion_forbidden(Path::new(r"C:")));
+        assert!(is_deletion_forbidden(Path::new(r"C:\Windows")));
+        assert!(is_deletion_forbidden(Path::new(r"C:\Windows\System32")));
+        assert!(is_deletion_forbidden(Path::new(r"C:\Program Files")));
+    }
+
+    #[test]
     fn test_deletion_allowed() {
         // Una cartella dentro la home dell'utente dovrebbe essere eliminabile
         // (a patto che non sia la home stessa o un suo antenato).
-        // Nota: non possiamo testare questo in modo deterministico perche'
-        // dirs_next::home_dir() dipende dall'ambiente.
     }
 }

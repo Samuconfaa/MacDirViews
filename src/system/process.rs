@@ -15,10 +15,12 @@ pub fn is_root() -> bool {
 
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
         // 'net session' restituisce codice 0 solo se il processo è elevato come amministratore
-        Command::new("net")
-            .arg("session")
-            .output()
+        let mut cmd = Command::new("net");
+        cmd.arg("session");
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW: evita flash della console
+        cmd.output()
             .map(|o| o.status.success())
             .unwrap_or(false)
     }
@@ -31,8 +33,8 @@ pub fn is_root() -> bool {
 
 /// Crea un comando che gira nella sessione grafica dell'utente loggato.
 /// Su macOS come root si passa da `launchctl asuser <uid>`, su Windows/altri il comando e' diretto.
+#[cfg(target_os = "macos")]
 pub fn user_session_command(is_admin: bool, program: &str) -> Command {
-    #[cfg(target_os = "macos")]
     if is_admin {
         let uid = std::env::var("SUDO_UID")
             .ok()
@@ -51,10 +53,10 @@ pub fn user_session_command(is_admin: bool, program: &str) -> Command {
     } else {
         Command::new(program)
     }
+}
 
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = is_admin;
-        Command::new(program)
-    }
+#[cfg(not(target_os = "macos"))]
+#[allow(dead_code)]
+pub fn user_session_command(_is_admin: bool, program: &str) -> Command {
+    Command::new(program)
 }

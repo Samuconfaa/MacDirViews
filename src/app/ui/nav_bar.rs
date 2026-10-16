@@ -69,7 +69,18 @@ impl MacDirViewsApp {
 
                                 let is_current = i + 1 == total_segments;
                                 let name = if seg_path == Path::new("/") || seg_path.parent().is_none() {
-                                    "Macintosh HD".to_string()
+                                    if cfg!(target_os = "macos") {
+                                        "Macintosh HD".to_string()
+                                    } else if cfg!(windows) {
+                                        let s = seg_path.to_string_lossy();
+                                        if s.is_empty() {
+                                            "Questo PC".to_string()
+                                        } else {
+                                            s.to_string()
+                                        }
+                                    } else {
+                                        "/".to_string()
+                                    }
                                 } else if home.as_ref() == Some(&seg_path) {
                                     "🏠 Home".to_string()
                                 } else {

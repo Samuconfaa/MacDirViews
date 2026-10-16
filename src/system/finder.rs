@@ -1,13 +1,36 @@
 //! Azioni sul file manager (Finder su macOS, Esplora Risorse su Windows): mostra nel file manager e sposta nel Cestino.
 
 use std::path::Path;
-#[cfg(windows)]
 use std::process::Command;
 
+#[cfg(target_os = "macos")]
 use super::process::user_session_command;
 
 /// Restituisce il nome dell'applicazione di gestione file predefinita del sistema.
+#[allow(dead_code)]
 pub fn file_manager_name() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Finder"
+    } else if cfg!(windows) {
+        "Esplora File"
+    } else {
+        "File Manager"
+    }
+}
+
+/// Etichetta completa per aprire l'elemento nel file manager ("Apri nel Finder" su macOS, "Apri in Esplora File" su Windows).
+pub fn open_in_file_manager_label() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Apri nel Finder"
+    } else if cfg!(windows) {
+        "Apri in Esplora File"
+    } else {
+        "Apri nel File Manager"
+    }
+}
+
+/// Etichetta compatta per i pulsanti ("Finder" su macOS, "Esplora File" su Windows).
+pub fn file_manager_button_label() -> &'static str {
     if cfg!(target_os = "macos") {
         "Finder"
     } else if cfg!(windows) {
@@ -37,6 +60,7 @@ pub fn move_to_trash(path: &Path, is_admin: bool) -> Result<(), String> {
 
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
         let _ = is_admin;
         let script = if path.is_dir() {
             format!(
@@ -49,12 +73,19 @@ pub fn move_to_trash(path: &Path, is_admin: bool) -> Result<(), String> {
                 path.to_string_lossy().replace('\'', "''")
             )
         };
-        match Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-            .output()
-        {
+        let mut cmd = Command::new("powershell");
+        cmd.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW: evita flash della console
+        match cmd.output() {
             Ok(o) if o.status.success() => Ok(()),
-            Ok(o) => Err(String::from_utf8_lossy(&o.stderr).trim().to_string()),
+            Ok(o) => {
+                let err = String::from_utf8_lossy(&o.stderr).trim().to_string();
+                if err.is_empty() {
+                    Err("Eliminazione nel Cestino di Windows non riuscita".into())
+                } else {
+                    Err(err)
+                }
+            }
             Err(e) => Err(e.to_string()),
         }
     }
@@ -78,7 +109,6 @@ pub fn reveal_in_finder(path: &Path, is_admin: bool) -> Result<(), String> {
         let mut cmd = user_session_command(is_admin, "open");
         cmd.arg("-R").arg(path);
 
-        // `output()` attende la fine (e' immediato) e permette di mostrare l'errore reale.
         match cmd.output() {
             Ok(out) if out.status.success() => Ok(()),
             Ok(out) => {
@@ -93,9 +123,12 @@ pub fn reveal_in_finder(path: &Path, is_admin: bool) -> Result<(), String> {
     {
         let _ = is_admin;
         let p = path.to_string_lossy();
-        // explorer.exe /select,"path" evidenzia l'elemento
         let mut cmd = Command::new("explorer.exe");
-        cmd.arg(format!("/select,{}", p));
+        if path.parent().is_none() {
+            cmd.arg(p.as_ref());
+        } else {
+            cmd.arg(format!("/select,{}", p));
+        }
         match cmd.spawn() {
             Ok(_) => Ok(()),
             Err(e) => Err(format!("Impossibile aprire Esplora File: {e}")),

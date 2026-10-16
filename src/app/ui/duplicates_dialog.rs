@@ -7,6 +7,7 @@ use eframe::egui;
 use egui::{Color32, RichText};
 
 use crate::app::{ActiveTool, MacDirViewsApp};
+use crate::system::finder::file_manager_button_label;
 use crate::utils::format::fmt_size;
 
 impl MacDirViewsApp {
@@ -140,7 +141,10 @@ impl MacDirViewsApp {
                                                 {
                                                     delete_file = Some(file.clone());
                                                 }
-                                                if ui.small_button("Finder").clicked() {
+                                                if ui
+                                                    .small_button(file_manager_button_label())
+                                                    .clicked()
+                                                {
                                                     open_path = Some(file.clone());
                                                 }
                                             },

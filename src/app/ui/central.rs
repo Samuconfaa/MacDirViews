@@ -10,6 +10,7 @@ use egui::{Align2, Color32, FontId, Pos2, Stroke};
 use super::folder_menu::folder_menu;
 use crate::app::squarify::{squarify, TreemapItem};
 use crate::app::{MacDirViewsApp, ViewMode};
+use crate::system::finder::open_in_file_manager_label;
 use crate::utils::color::color_for;
 use crate::utils::format::fmt_size;
 
@@ -228,7 +229,7 @@ impl MacDirViewsApp {
         ui.horizontal(|ui| {
             let can_open = self.selected.is_some() || !self.view_dir.as_os_str().is_empty();
             if ui
-                .add_enabled(can_open, egui::Button::new("Apri nel Finder"))
+                .add_enabled(can_open, egui::Button::new(open_in_file_manager_label()))
                 .clicked()
             {
                 open_path = self.selected.clone().or_else(|| Some(self.view_dir.clone()));

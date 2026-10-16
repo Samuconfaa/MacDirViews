@@ -6,6 +6,7 @@ use eframe::egui;
 use egui::{Color32, RichText};
 
 use crate::app::{ActiveTool, MacDirViewsApp};
+use crate::system::finder::{file_manager_button_label, open_in_file_manager_label};
 use crate::utils::format::fmt_size;
 
 impl MacDirViewsApp {
@@ -16,7 +17,12 @@ impl MacDirViewsApp {
         let mut clean_requested = false;
         let mut rescan_requested = false;
 
-        egui::Window::new("🧹 Pulizia Rapida (Developer & System Junk)")
+        let title = format!(
+            "🧹 Pulizia Rapida ({} & Dev Junk)",
+            if cfg!(windows) { "Windows" } else { "macOS" }
+        );
+
+        egui::Window::new(title)
             .min_width(650.0)
             .min_height(450.0)
             .resizable(true)
@@ -92,7 +98,11 @@ impl MacDirViewsApp {
                                 });
 
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui.small_button("Finder").on_hover_text("Rivela nel Finder").clicked() {
+                                    if ui
+                                        .small_button(file_manager_button_label())
+                                        .on_hover_text(open_in_file_manager_label())
+                                        .clicked()
+                                    {
                                         open_path = Some(item.path.clone());
                                     }
                                     ui.label(RichText::new(fmt_size(item.size)).strong().color(Color32::YELLOW));

@@ -5,7 +5,7 @@ use eframe::egui;
 use egui::Color32;
 
 use crate::app::{ActiveTool, MacDirViewsApp};
-use crate::system::protection::list_volumes;
+use crate::system::protection::{list_volumes, scan_all_label, system_root_path};
 use crate::utils::format::fmt_size;
 
 impl MacDirViewsApp {
@@ -34,18 +34,22 @@ impl MacDirViewsApp {
                     }
                 }
                 if ui
-                    .add_enabled(!scanning, egui::Button::new("Scansiona tutto (/)"))
+                    .add_enabled(!scanning, egui::Button::new(scan_all_label()))
                     .clicked()
                 {
-                    self.path_input = "/".to_string();
+                    self.path_input = system_root_path().display().to_string();
                     self.start_scan(ctx);
                 }
 
-                // Menu volumi esterni.
+                // Menu volumi / unità esterne.
                 ui.menu_button("💾 Volumi...", |ui| {
                     let volumes = list_volumes();
                     if volumes.is_empty() {
-                        ui.label("Nessun volume trovato in /Volumes");
+                        if cfg!(windows) {
+                            ui.label("Nessuna unità disco trovata");
+                        } else {
+                            ui.label("Nessun volume trovato in /Volumes");
+                        }
                     }
                     for (name, path) in &volumes {
                         if ui.button(format!("{} ({})", name, path.display())).clicked() {
@@ -60,9 +64,15 @@ impl MacDirViewsApp {
                 ui.separator();
 
                 // Nuovi strumenti rapidi
+                let junk_tooltip = if cfg!(windows) {
+                    "Pulisci cache temporanee (%TEMP%), dump di crash e package manager"
+                } else {
+                    "Pulisci cache temporanee, Xcode DerivedData e package manager"
+                };
+
                 if ui
                     .button("🧹 Pulizia Rapida")
-                    .on_hover_text("Pulisci cache temporanee, Xcode DerivedData e package manager")
+                    .on_hover_text(junk_tooltip)
                     .clicked()
                 {
                     self.active_tool = ActiveTool::JunkCleaner;
@@ -91,7 +101,9 @@ impl MacDirViewsApp {
                     if ui.add_enabled(!scanning, egui::Button::new("Riavvia come admin")).clicked() {
                         self.relaunch_as_admin(ctx);
                     }
-                    // Guida Full Disk Access.
+
+                    // Guida permessi elevati specifica per OS
+                    #[cfg(target_os = "macos")]
                     ui.menu_button("ℹ Full Disk Access", |ui| {
                         ui.label("Per leggere Mail, Foto e altre cartelle protette:");
                         ui.add_space(4.0);
@@ -106,6 +118,15 @@ impl MacDirViewsApp {
                                 .spawn();
                             ui.close_menu();
                         }
+                    });
+
+                    #[cfg(windows)]
+                    ui.menu_button("ℹ Privilegi Admin (UAC)", |ui| {
+                        ui.label("Per scansionare cartelle di sistema protette:");
+                        ui.add_space(4.0);
+                        ui.label("1. Clicca su 'Riavvia come admin'");
+                        ui.label("2. Conferma la richiesta UAC di Windows");
+                        ui.label("3. L'app si riavvierà con diritti completi");
                     });
                 }
             });

@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui;
 
+use crate::system::finder::open_in_file_manager_label;
 use crate::system::protection::is_deletion_forbidden;
 
 /// Voci del menu contestuale di una cartella.
@@ -16,7 +17,7 @@ pub(in crate::app) fn folder_menu(
 ) {
     ui.label(path.display().to_string());
     ui.separator();
-    if ui.button("Apri nel Finder").clicked() {
+    if ui.button(open_in_file_manager_label()).clicked() {
         *open_req = Some(path.to_path_buf());
         ui.close_menu();
     }

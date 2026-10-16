@@ -30,9 +30,12 @@ impl MacDirViewsApp {
                     return;
                 }
             }
-        } else if input == "~" || input.starts_with("~/") {
+        } else if input == "~" || input.starts_with("~/") || input.starts_with(r"~\") {
             match dirs_next::home_dir() {
-                Some(home) => home.join(input.trim_start_matches('~').trim_start_matches('/')),
+                Some(home) => {
+                    let sub = input.trim_start_matches('~').trim_start_matches('/').trim_start_matches('\\');
+                    home.join(sub)
+                }
                 None => {
                     self.status = Some("Impossibile determinare la cartella Home.".into());
                     return;
@@ -340,45 +343,91 @@ impl MacDirViewsApp {
         }
     }
 
-    /// Rilancia l'app con permessi di amministratore (richiede password macOS).
+    /// Rilancia l'app con permessi di amministratore (richiede password su macOS, UAC su Windows).
     pub(super) fn relaunch_as_admin(&mut self, ctx: &egui::Context) {
         let exe = match std::env::current_exe() {
-            Ok(e) => e.to_string_lossy().to_string(),
+            Ok(e) => e,
             Err(e) => {
                 self.status = Some(format!("Percorso dell'eseguibile non disponibile: {e}"));
                 return;
             }
         };
-        if exe.contains('"') || exe.contains('\\') || exe.contains('\'') {
-            self.status = Some(
-                "Il percorso dell'app contiene caratteri non supportati: usa `sudo` da Terminale."
-                    .into(),
-            );
-            return;
-        }
-        let script = format!(
-            r#"do shell script "\"{}\" >/dev/null 2>&1 &" with administrator privileges"#,
-            exe
-        );
-        let msg = Arc::clone(&self.admin_msg);
-        let ctx = ctx.clone();
-        std::thread::spawn(move || {
-            match Command::new("osascript").arg("-e").arg(script).output() {
-                Ok(out) if out.status.success() => {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-                Ok(out) => {
-                    let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-                    *msg.lock().unwrap() =
-                        Some(format!("Avvio come amministratore annullato o fallito: {err}"));
-                    ctx.request_repaint();
-                }
-                Err(e) => {
-                    *msg.lock().unwrap() = Some(format!("Impossibile eseguire osascript: {e}"));
-                    ctx.request_repaint();
-                }
+
+        #[cfg(target_os = "macos")]
+        {
+            let exe_str = exe.to_string_lossy().to_string();
+            if exe_str.contains('"') || exe_str.contains('\\') || exe_str.contains('\'') {
+                self.status = Some(
+                    "Il percorso dell'app contiene caratteri non supportati: usa `sudo` da Terminale."
+                        .into(),
+                );
+                return;
             }
-        });
+            let script = format!(
+                r#"do shell script "\"{}\" >/dev/null 2>&1 &" with administrator privileges"#,
+                exe_str
+            );
+            let msg = Arc::clone(&self.admin_msg);
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                match Command::new("osascript").arg("-e").arg(script).output() {
+                    Ok(out) if out.status.success() => {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    Ok(out) => {
+                        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                        *msg.lock().unwrap() =
+                            Some(format!("Avvio come amministratore annullato o fallito: {err}"));
+                        ctx.request_repaint();
+                    }
+                    Err(e) => {
+                        *msg.lock().unwrap() = Some(format!("Impossibile eseguire osascript: {e}"));
+                        ctx.request_repaint();
+                    }
+                }
+            });
+        }
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let exe_str = exe.to_string_lossy().to_string();
+            let msg = Arc::clone(&self.admin_msg);
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                let script = format!(
+                    "Start-Process -FilePath '{}' -Verb RunAs",
+                    exe_str.replace('\'', "''")
+                );
+                let mut cmd = Command::new("powershell");
+                cmd.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+                cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+                match cmd.output() {
+                    Ok(out) if out.status.success() => {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    Ok(out) => {
+                        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                        if !err.is_empty() {
+                            *msg.lock().unwrap() =
+                                Some(format!("Avvio come amministratore annullato o fallito: {err}"));
+                        }
+                        ctx.request_repaint();
+                    }
+                    Err(e) => {
+                        *msg.lock().unwrap() =
+                            Some(format!("Impossibile avviare come amministratore: {e}"));
+                        ctx.request_repaint();
+                    }
+                }
+            });
+        }
+
+        #[cfg(not(any(target_os = "macos", windows)))]
+        {
+            self.status =
+                Some("Riavvio come admin non supportato su questo sistema operativo.".into());
+        }
     }
 
     /// Avvia l'eliminazione in un thread (Cestino oppure definitiva per cartelle e singoli file).

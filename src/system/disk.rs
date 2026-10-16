@@ -15,6 +15,7 @@ pub struct DiskUsage {
 
 impl DiskUsage {
     /// Percentuale di spazio usato (0.0 - 100.0).
+    #[allow(dead_code)]
     pub fn used_percentage(&self) -> f32 {
         if self.total_bytes == 0 {
             0.0
@@ -25,10 +26,14 @@ impl DiskUsage {
 }
 
 /// Legge lo spazio su disco del volume che contiene `path`.
-/// Esegue `df -k -P <path>` (standard POSIX supportato nativamente su macOS e Linux).
+/// Esegue `df -k -P <path>` su macOS/Unix o PowerShell su Windows.
 pub fn get_disk_usage(path: &Path) -> Option<DiskUsage> {
     let target = if path.as_os_str().is_empty() {
-        Path::new("/")
+        if cfg!(windows) {
+            Path::new("C:\\")
+        } else {
+            Path::new("/")
+        }
     } else {
         path
     };
@@ -51,9 +56,10 @@ pub fn get_disk_usage(path: &Path) -> Option<DiskUsage> {
         parse_df_output(&text)
     }
 
-    // Su Windows (fallback di sviluppo per test locali)
+    // Su Windows: usa PowerShell in modalità silenziosa
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
         // Se siamo su Windows, tentiamo di estrarre la lettera del drive (es. "C:" o "E:")
         let path_str = target.to_string_lossy();
         let drive = if path_str.len() >= 2 && path_str.chars().nth(1) == Some(':') {
@@ -62,12 +68,14 @@ pub fn get_disk_usage(path: &Path) -> Option<DiskUsage> {
             "C:"
         };
 
-        // Prova a leggere via wmic / powershell in modo non bloccante
         let cmd = format!(
             "(Get-PSDrive -Name '{}' | Select-Object Used,Free | ConvertTo-Csv -NoTypeInformation)[1]",
             drive.trim_end_matches(':')
         );
-        if let Ok(output) = Command::new("powershell").args(["-NoProfile", "-Command", &cmd]).output() {
+        let mut ps = Command::new("powershell");
+        ps.args(["-NoProfile", "-NonInteractive", "-Command", &cmd]);
+        ps.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        if let Ok(output) = ps.output() {
             if output.status.success() {
                 let out_str = String::from_utf8_lossy(&output.stdout);
                 let parts: Vec<&str> = out_str.trim().split(',').map(|s| s.trim_matches('"')).collect();
@@ -76,8 +84,8 @@ pub fn get_disk_usage(path: &Path) -> Option<DiskUsage> {
                     let free: u64 = parts[1].parse().unwrap_or(0);
                     let total = used + free;
                     return Some(DiskUsage {
-                        volume_name: format!("Disco ({})", drive),
-                        mount_point: format!("{}\\", drive),
+                        volume_name: format!("Disco ({drive})"),
+                        mount_point: format!("{drive}\\"),
                         total_bytes: total,
                         used_bytes: used,
                         free_bytes: free,
@@ -87,12 +95,18 @@ pub fn get_disk_usage(path: &Path) -> Option<DiskUsage> {
         }
         None
     }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        None
+    }
 }
 
 /// Esegue il parsing dell'output standard di `df -k -P`.
 /// Formato:
 /// Filesystem 1024-blocks Used Available Capacity Mounted on
 /// /dev/disk3s1s1 482884968 11054368 44837584 20% /
+#[cfg(unix)]
 pub fn parse_df_output(output: &str) -> Option<DiskUsage> {
     let mut lines = output.lines();
     let _header = lines.next()?;
