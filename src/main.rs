@@ -1,4 +1,4 @@
-//! MacDirViews - clone moderno di WinDirStat per macOS.
+//! DirTreeView - clone moderno di WinDirStat per macOS.
 //!
 //! Architettura:
 //! - La scansione (`scanner`) gira in un thread separato (`std::thread::spawn`), cosi' la UI non si blocca.
@@ -24,7 +24,7 @@ mod utils;
 
 use eframe::egui;
 
-use app::MacDirViewsApp;
+use app::DirTreeViewApp;
 use constants::APP_NAME;
 
 fn main() -> eframe::Result<()> {
@@ -44,6 +44,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         APP_NAME,
         options,
-        Box::new(|_cc| Ok(Box::new(MacDirViewsApp::default()))),
+        Box::new(|_cc| Ok(Box::new(DirTreeViewApp::default()))),
     )
 }

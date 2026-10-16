@@ -13,4 +13,4 @@ mod walker;
 pub use duplicates::{find_duplicates, DuplicateGroup};
 pub use junk::{scan_developer_and_system_junk, JunkItem};
 pub use tree::{DirTree, FileInfo};
-pub use walker::scan_directory;
+pub use walker::scan_directory_shallow;

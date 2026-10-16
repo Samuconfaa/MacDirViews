@@ -7,10 +7,10 @@ use eframe::egui;
 use egui::{Color32, RichText};
 
 use super::folder_menu::folder_menu;
-use crate::app::MacDirViewsApp;
+use crate::app::DirTreeViewApp;
 use crate::utils::format::fmt_size;
 
-impl MacDirViewsApp {
+impl DirTreeViewApp {
     /// Disegna la vista ad albero gerarchica a partire da `self.view_dir`.
     pub(in crate::app) fn tree_view_ui(&mut self, ui: &mut egui::Ui, scanning: bool) {
         if self.view_dir.as_os_str().is_empty() {
@@ -90,12 +90,21 @@ impl MacDirViewsApp {
         del_request: &mut Option<(PathBuf, bool)>,
         toggle_node: &mut Option<PathBuf>,
     ) {
-        let (children, direct_size) = {
+        let (children, direct_size, scanned) = {
             let guard = self.tree.lock().unwrap();
             let ch = guard.children_of(path);
             let dir_size = guard.get_node(path).map(|n| n.direct_size).unwrap_or(0);
-            (ch, dir_size)
+            let scanned = guard.is_scanned(path);
+            (ch, dir_size, scanned)
         };
+
+        if !scanned {
+            ui.horizontal(|ui| {
+                ui.add_space(depth as f32 * 18.0);
+                ui.label(RichText::new("(contenuto da calcolare)").weak());
+            });
+            return;
+        }
 
         if children.is_empty() && direct_size == 0 {
             ui.horizontal(|ui| {
@@ -106,6 +115,7 @@ impl MacDirViewsApp {
         }
 
         for (name, child_path, size) in children {
+            let size_complete = self.tree.lock().unwrap().is_shallow_complete(&child_path);
             let is_expanded = self.expanded_tree_nodes.contains(&child_path);
             let is_sel = self.selected.as_ref() == Some(&child_path);
             let pct = (size as f64 / root_size as f64 * 100.0) as f32;
@@ -146,9 +156,9 @@ impl MacDirViewsApp {
 
                 // Dimensione e percentuale a destra
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new(format!("{:.1}%", pct)).weak());
+                    ui.label(RichText::new(format!("{}{:.1}%", if size_complete { "" } else { "≥ " }, pct)).weak());
                     ui.add_space(10.0);
-                    ui.label(RichText::new(fmt_size(size)).strong());
+                    ui.label(RichText::new(if size_complete { fmt_size(size) } else { format!("≥ {} (parziale)", fmt_size(size)) }).strong());
                 });
             });
 

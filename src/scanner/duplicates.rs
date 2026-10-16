@@ -9,9 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use jwalk::WalkDir;
-
-use crate::system::protection::is_protected_directory;
+use crate::system::protection::{is_protected_directory, is_protected_name};
 
 /// Gruppo di file con contenuto identico.
 #[derive(Clone, Debug, PartialEq)]
@@ -59,32 +57,44 @@ pub fn find_duplicates(
 ) -> Vec<DuplicateGroup> {
     // Fase 1: Raggruppamento per dimensione
     let mut by_size: HashMap<u64, Vec<PathBuf>> = HashMap::new();
+    let mut dir_stack: Vec<PathBuf> = vec![root.to_path_buf()];
 
-    let walker = WalkDir::new(root)
-        .skip_hidden(true)
-        .follow_links(false)
-        .process_read_dir(|_depth, _path, _state, children| {
-            children.retain(|entry| match entry {
-                Ok(e) => !(e.file_type().is_dir() && is_protected_directory(&e.path())),
-                Err(_) => true,
-            });
-        });
-
-    for entry in walker {
+    while let Some(dir) = dir_stack.pop() {
         if cancel_flag.load(Ordering::Relaxed) {
             return Vec::new();
         }
-        let entry = match entry {
+
+        let entries = match std::fs::read_dir(&dir) {
             Ok(e) => e,
             Err(_) => continue,
         };
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        if let Ok(meta) = entry.metadata() {
-            let size = meta.len();
-            if size >= min_size_bytes {
-                by_size.entry(size).or_default().push(entry.path());
+
+        for entry in entries.flatten() {
+            let ft = match entry.file_type() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+
+            if ft.is_dir() {
+                let fname = entry.file_name();
+                if fname.to_string_lossy().starts_with('.') || is_protected_name(&fname) {
+                    continue;
+                }
+                let p = entry.path();
+                if !is_protected_directory(&p) {
+                    dir_stack.push(p);
+                }
+            } else if ft.is_file() {
+                let fname = entry.file_name();
+                if fname.to_string_lossy().starts_with('.') {
+                    continue;
+                }
+                if let Ok(meta) = entry.metadata() {
+                    let size = meta.len();
+                    if size >= min_size_bytes {
+                        by_size.entry(size).or_default().push(entry.path());
+                    }
+                }
             }
         }
     }

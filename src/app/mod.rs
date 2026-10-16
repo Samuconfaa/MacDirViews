@@ -59,9 +59,10 @@ pub enum ActiveTool {
     DuplicateFinder,
 }
 
-pub struct MacDirViewsApp {
+pub struct DirTreeViewApp {
     pub path_input: String,
     pub scanning: Arc<Mutex<bool>>,
+    pub scan_completed: Arc<std::sync::atomic::AtomicBool>,
     pub tree: Arc<Mutex<DirTree>>,
     pub files_counter: Arc<AtomicU64>,
     pub cancel_flag: Arc<AtomicBool>,
@@ -107,6 +108,7 @@ pub struct MacDirViewsApp {
     // --- Nuove Funzionalità ---
     // Vista centrale (Treemap / Albero / Split)
     pub view_mode: ViewMode,
+    pub left_panel_open: bool,
     // Nodi espansi nella Tree View
     pub expanded_tree_nodes: HashSet<PathBuf>,
 
@@ -136,11 +138,12 @@ pub struct MacDirViewsApp {
     pub last_live_sync: Instant,
 }
 
-impl Default for MacDirViewsApp {
+impl Default for DirTreeViewApp {
     fn default() -> Self {
         Self {
             path_input: String::new(),
             scanning: Arc::new(Mutex::new(false)),
+            scan_completed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tree: Arc::new(Mutex::new(DirTree::new(PathBuf::new()))),
             files_counter: Arc::new(AtomicU64::new(0)),
             cancel_flag: Arc::new(AtomicBool::new(false)),
@@ -168,6 +171,7 @@ impl Default for MacDirViewsApp {
 
             // Nuove opzioni
             view_mode: ViewMode::Treemap,
+            left_panel_open: true,
             expanded_tree_nodes: HashSet::new(),
             aging_filter: AgingFilter::All,
             disk_usage: None,

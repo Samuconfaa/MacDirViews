@@ -4,7 +4,7 @@
 //! dimensione diretta (file propri) e la dimensione cumulativa (inclusi figli).
 //! Questo evita di ricalcolare tutto con `rollup` a ogni aggiornamento.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -16,6 +16,13 @@ pub struct FileInfo {
     pub modified: Option<SystemTime>,
 }
 
+pub struct ShallowDirectory {
+    pub path: PathBuf,
+    pub direct_size: u64,
+    pub child_names: Vec<String>,
+    pub top_files: Vec<FileInfo>,
+}
+
 /// Nodo dell'albero: una directory con la sua dimensione.
 #[derive(Clone, Debug)]
 pub struct DirNode {
@@ -23,6 +30,7 @@ pub struct DirNode {
     pub direct_size: u64,
     /// Dimensione cumulativa (direct_size + somma cumulativa di tutti i figli).
     pub cumulative_size: u64,
+    pub scanned: bool,
     /// Figli diretti (nome componente -> nodo).
     pub children: HashMap<String, DirNode>,
 }
@@ -32,6 +40,7 @@ impl DirNode {
         Self {
             direct_size: 0,
             cumulative_size: 0,
+            scanned: false,
             children: HashMap::new(),
         }
     }
@@ -61,26 +70,123 @@ impl DirTree {
         }
     }
 
-    /// Aggiunge la dimensione di un file alla directory `parent_dir`.
-    /// Aggiorna ricorsivamente la dimensione cumulativa di tutti gli antenati.
-    pub fn add_file(&mut self, parent_dir: &Path, file_size: u64) {
-        let rel = match parent_dir.strip_prefix(&self.root_path) {
-            Ok(r) => r.to_path_buf(),
+    /// Aggiunge la dimensione aggregata di una directory.
+    /// Aggiorna la dimensione diretta e propaga la dimensione cumulativa a tutti gli antenati
+    /// senza allocazioni di stringhe superflue quando i nodi sono già presenti.
+    pub fn add_dir_size(&mut self, dir_path: &Path, dir_size: u64) {
+        if dir_size == 0 && dir_path != self.root_path {
+            return;
+        }
+        let rel = match dir_path.strip_prefix(&self.root_path) {
+            Ok(r) => r,
             Err(_) => return,
         };
 
         let mut node = &mut self.root;
-        node.cumulative_size += file_size;
+        node.cumulative_size += dir_size;
 
         for component in rel.components() {
-            let name = component.as_os_str().to_string_lossy().to_string();
-            node = node.children.entry(name).or_insert_with(DirNode::new);
-            node.cumulative_size += file_size;
+            if let std::path::Component::Normal(c) = component {
+                let name = c.to_string_lossy();
+                if !node.children.contains_key(name.as_ref()) {
+                    node.children.insert(name.to_string(), DirNode::new());
+                }
+                node = node.children.get_mut(name.as_ref()).unwrap();
+                node.cumulative_size += dir_size;
+            }
         }
-        node.direct_size += file_size;
+        node.direct_size += dir_size;
+    }
+
+    /// Records direct directory sizes; call `rebuild_cumulative_sizes` once afterward.
+    #[allow(dead_code)]
+    pub fn set_dir_direct_size(&mut self, dir_path: &Path, dir_size: u64) {
+        let Ok(rel) = dir_path.strip_prefix(&self.root_path) else {
+            return;
+        };
+        let mut node = &mut self.root;
+        for component in rel.components() {
+            if let std::path::Component::Normal(c) = component {
+                let name = c.to_string_lossy().into_owned();
+                node = node.children.entry(name).or_insert_with(DirNode::new);
+            }
+        }
+        node.direct_size += dir_size;
+    }
+
+    /// Rebuilds cumulative sizes in one post-order pass.
+    pub fn rebuild_cumulative_sizes(&mut self) {
+        fn sum(node: &mut DirNode) -> u64 {
+            node.cumulative_size = node.direct_size;
+            for child in node.children.values_mut() {
+                node.cumulative_size += sum(child);
+            }
+            node.cumulative_size
+        }
+        sum(&mut self.root);
+    }
+
+    pub fn update_shallow_batch(&mut self, directories: Vec<ShallowDirectory>) {
+        for directory in directories {
+            let Ok(rel) = directory.path.strip_prefix(&self.root_path) else { continue };
+            let mut node = &mut self.root;
+            for component in rel.components() {
+                if let std::path::Component::Normal(c) = component {
+                    let name = c.to_string_lossy().into_owned();
+                    node = node.children.entry(name).or_insert_with(DirNode::new);
+                }
+            }
+            node.direct_size = directory.direct_size;
+            node.scanned = true;
+            let names: HashSet<&str> = directory.child_names.iter().map(String::as_str).collect();
+            node.children.retain(|name, _| names.contains(name.as_str()));
+            for name in directory.child_names {
+                node.children.entry(name).or_insert_with(DirNode::new);
+            }
+            self.top_files.extend(directory.top_files);
+        }
+        self.top_files.sort_by(|a, b| b.size.cmp(&a.size));
+        self.top_files.dedup_by(|a, b| a.path == b.path);
+        self.top_files.truncate(20);
+        self.rebuild_cumulative_sizes();
+    }
+
+    pub fn is_scanned(&self, abs_path: &Path) -> bool {
+        self.get_node(abs_path).map(|node| node.scanned).unwrap_or(false)
+    }
+
+    pub fn needs_shallow_scan(&self, abs_path: &Path) -> bool {
+        self.get_node(abs_path)
+            .map(|node| !node.scanned || node.children.values().any(|child| !child.scanned))
+            .unwrap_or(true)
+    }
+
+    pub fn is_shallow_complete(&self, abs_path: &Path) -> bool {
+        self.get_node(abs_path)
+            .map(|node| node.scanned && node.children.values().all(|child| child.scanned))
+            .unwrap_or(false)
+    }
+
+    /// Aggiunge la dimensione di un file alla directory `parent_dir`.
+    #[allow(dead_code)]
+    pub fn add_file(&mut self, parent_dir: &Path, file_size: u64) {
+        self.add_dir_size(parent_dir, file_size);
+    }
+
+    /// Verifica rapida in O(1) se la dimensione del file è abbastanza grande per entrare nella Top N.
+    #[allow(dead_code)]
+    pub fn is_top_file_candidate(&self, size: u64, max_top: usize) -> bool {
+        if self.top_files.len() < max_top {
+            true
+        } else if let Some(min) = self.top_files.last() {
+            size > min.size
+        } else {
+            true
+        }
     }
 
     /// Aggiunge un file alla classifica top files (mantiene solo i top N).
+    #[allow(dead_code)]
     pub fn add_top_file(
         &mut self,
         path: PathBuf,
@@ -117,6 +223,7 @@ impl DirTree {
     }
 
     /// Registra una cartella saltata.
+    #[allow(dead_code)]
     pub fn record_skipped(&mut self, path: &Path, reason: &str) {
         self.skipped_dirs += 1;
         if self.skipped_messages.len() < 50 {
@@ -166,6 +273,7 @@ impl DirTree {
 
     /// Raccoglie tutte le cartelle discendenti con le relative dimensioni,
     /// per la Top 10 nella vista corrente.
+    #[allow(dead_code)]
     pub fn all_descendants(&self, abs_path: &Path) -> Vec<(PathBuf, u64)> {
         let node = match self.get_node(abs_path) {
             Some(n) => n,
@@ -176,6 +284,7 @@ impl DirTree {
         result
     }
 
+    #[allow(dead_code)]
     fn collect_descendants(node: &DirNode, path: &Path, out: &mut Vec<(PathBuf, u64)>) {
         for (name, child) in &node.children {
             let child_path = path.join(name);

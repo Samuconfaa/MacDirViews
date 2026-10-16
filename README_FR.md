@@ -8,15 +8,15 @@
 
 ***
 
-# MacDirViews
+# DirTreeView
 
 Un visualiseur d'espace disque et un outil de nettoyage moderne, rapide et performant pour macOS.
 
-MacDirViews propose un aperçu graphique interactif et intuitif de l'utilisation de votre disque à l'aide de treemaps rectangulaires (squarified treemaps). Il vous permet d'identifier instantanément les fichiers et répertoires volumineux sur vos disques internes, volumes externes ou dossiers spécifiques, rendant l'analyse et la libération d'espace rapides, claires et sûres.
+DirTreeView propose un aperçu graphique interactif et intuitif de l'utilisation de votre disque à l'aide de treemaps rectangulaires (squarified treemaps). Il vous permet d'identifier instantanément les fichiers et répertoires volumineux sur vos disques internes, volumes externes ou dossiers spécifiques, rendant l'analyse et la libération d'espace rapides, claires et sûres.
 
 ---
 
-## Pourquoi choisir MacDirViews ?
+## Pourquoi choisir DirTreeView ?
 
 - **Extrêmement rapide et non bloquant** : Développé en Rust avec analyse multi-threadée native. Il parcourt des millions de fichiers en quelques secondes tout en maintenant l'interface graphique parfaitement fluide à 60 FPS.
 - **Calcul précis pour APFS** : Mesure l'occupation physique réelle sur le disque plutôt que la simple taille nominale. Il gère avec précision les fichiers fragmentés (sparse files) et évite le double comptage des clones copy-on-write et des liens physiques APFS.
@@ -44,13 +44,13 @@ MacDirViews propose un aperçu graphique interactif et intuitif de l'utilisation
 
 **Il n'est pas nécessaire de compiler le code.** Des images disques `.dmg` et des paquets `.app` prêts à l'emploi sont publiés pour chaque version :
 
-1. Téléchargez la dernière version depuis [GitHub Releases](https://github.com/Samuconfaa/MacDirViews/releases).
-2. Ouvrez le fichier `.dmg` et glissez **MacDirViews** dans votre dossier `/Applications`.
+1. Téléchargez la dernière version depuis [GitHub Releases](https://github.com/Samuconfaa/DirTreeView/releases).
+2. Ouvrez le fichier `.dmg` et glissez **DirTreeView** dans votre dossier `/Applications`.
 
 > [!NOTE]
 > Si macOS Gatekeeper bloque l'ouverture d'une version non signée téléchargée sur Internet, faites un clic droit sur l'application puis **Ouvrir**, ou exécutez la commande suivante dans le Terminal :
 > ```bash
-> xattr -cr /Applications/MacDirViews.app
+> xattr -cr /Applications/DirTreeView.app
 > ```
 
 ### Compilation depuis les Sources (Optionnel)
@@ -77,10 +77,10 @@ cargo bundle --release
 
 macOS protège les données personnelles des utilisateurs (telles que Mail, Messages, l'historique Safari et les photothèques) par le mécanisme TCC (Transparency, Consent, and Control).
 
-Pour permettre à MacDirViews d'analyser l'intégralité du disque de démarrage sans erreurs de permissions :
+Pour permettre à DirTreeView d'analyser l'intégralité du disque de démarrage sans erreurs de permissions :
 
 1. Ouvrez **Réglages Système** → **Confidentialité et sécurité** → **Accès complet au disque**.
-2. Cliquez sur le bouton **+** et ajoutez **MacDirViews** (ou votre binaire compilé).
+2. Cliquez sur le bouton **+** et ajoutez **DirTreeView** (ou votre binaire compilé).
 3. Redémarrez l'application.
 
 *(Vous pouvez également utiliser le bouton **Full Disk Access** situé dans la barre supérieure de l'application pour ouvrir directement ce panneau).*

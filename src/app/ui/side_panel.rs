@@ -7,12 +7,12 @@ use std::time::{Duration, SystemTime};
 use eframe::egui;
 
 use super::folder_menu::folder_menu;
-use crate::app::{AgingFilter, MacDirViewsApp};
+use crate::app::{AgingFilter, DirTreeViewApp};
 use crate::system::finder::open_in_file_manager_label;
 use crate::system::protection::is_deletion_forbidden;
 use crate::utils::format::fmt_size;
 
-impl MacDirViewsApp {
+impl DirTreeViewApp {
     pub(in crate::app) fn side_panel_ui(&mut self, ctx: &egui::Context, scanning: bool) {
         let mut clicked_path: Option<PathBuf> = None;
         let mut side_open: Option<PathBuf> = None;
@@ -133,7 +133,7 @@ impl MacDirViewsApp {
                     ui.separator();
 
                     // --- Top 10 cartelle ---
-                    ui.heading("📁 Top 10 cartelle");
+                    ui.heading("📁 Top 10 cartelle in questa vista");
                     ui.label(format!("in: {}", self.view_dir.display()));
                     ui.separator();
                     if self.top10.is_empty() {
@@ -161,6 +161,7 @@ impl MacDirViewsApp {
                         other => format!("⏳ File Inutilizzati ({})", other.label()),
                     };
                     ui.heading(aging_heading);
+                    ui.small("File già caricati nelle cartelle visitate");
 
                     let min_age = match self.aging_filter {
                         AgingFilter::All => None,

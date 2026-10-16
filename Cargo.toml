@@ -1,18 +1,19 @@
 [package]
-name = "macdirviews"
-version = "0.2.0"
+name = "dirtreeview"
+version = "0.3.0"
 edition = "2021"
 
 [dependencies]
 eframe = "0.29"
-jwalk = "0.8"
 dirs-next = "2"
 rfd = "0.15"
+crossbeam-channel = "0.5"
+rayon = "1.10"
 
-# Per creare il bundle macOS (MacDirViews.app) con l'icona nel Dock/Finder:
+# Per creare il bundle macOS (DirTreeView.app) con l'icona nel Dock/Finder:
 #   cargo install cargo-bundle && cargo bundle --release
 # Per il Dock serve un file .icns: aggiungilo in assets/ e mettilo in `icon`.
 [package.metadata.bundle]
-name = "MacDirViews"
-identifier = "com.macdirviews.app"
+name = "DirTreeView"
+identifier = "com.dirtreeview.app"
 icon = ["assets/icon.icns"]

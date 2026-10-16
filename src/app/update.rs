@@ -5,9 +5,9 @@ use std::time::Duration;
 
 use eframe::egui;
 
-use super::{ActiveTool, MacDirViewsApp};
+use super::{ActiveTool, DirTreeViewApp};
 
-impl eframe::App for MacDirViewsApp {
+impl eframe::App for DirTreeViewApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let scanning = *self.scanning.lock().unwrap();
 
@@ -62,21 +62,33 @@ impl eframe::App for MacDirViewsApp {
             self.last_live_sync = std::time::Instant::now();
         }
 
+        let scan_completed = self.scan_completed.swap(false, std::sync::atomic::Ordering::Acquire);
         if scanning {
             ctx.request_repaint_after(Duration::from_millis(100));
-            if self.last_refresh.elapsed() >= Duration::from_millis(500) {
-                self.refresh();
-            }
-        } else if self.was_scanning {
+        } else if self.was_scanning || scan_completed {
             self.refresh();
             self.refresh_disk_usage(ctx);
             ctx.request_repaint();
         }
         self.was_scanning = scanning;
 
+        if !scanning && !self.cancel_flag.load(std::sync::atomic::Ordering::Relaxed)
+            && !self.scan_root.as_os_str().is_empty()
+        {
+            let next_scan = {
+                let tree = self.tree.lock().unwrap();
+                if tree.needs_shallow_scan(&self.view_dir) {
+                    Some(self.view_dir.clone())
+                } else {
+                    self.expanded_tree_nodes.iter().find(|path| !tree.is_scanned(path)).cloned()
+                }
+            };
+            if let Some(path) = next_scan { self.start_shallow_scan(path, ctx); }
+        }
+
         // Pannelli dell'interfaccia
         self.top_bar_ui(ctx, scanning);
-        self.side_panel_ui(ctx, scanning);
+        if self.left_panel_open { self.side_panel_ui(ctx, scanning); }
         egui::CentralPanel::default().show(ctx, |ui| {
             self.central_ui(ui, scanning);
         });

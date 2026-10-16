@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use eframe::egui;
 use egui::Color32;
 
-use crate::app::MacDirViewsApp;
+use crate::app::DirTreeViewApp;
 
-impl MacDirViewsApp {
+impl DirTreeViewApp {
     pub(in crate::app) fn nav_bar_ui(&mut self, ui: &mut egui::Ui) {
         let mut go_up = false;
         let mut go_back = false;

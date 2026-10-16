@@ -8,15 +8,15 @@
 
 ***
 
-# MacDirViews
+# DirTreeView
 
 A fast, modern disk space visualizer and cleanup utility for macOS.
 
-MacDirViews provides an intuitive, interactive graphical overview of your disk usage using squarified treemaps. It helps you instantly identify what is consuming storage across internal drives, external volumes, and individual folders, making disk cleanup fast, clear, and safe.
+DirTreeView provides an intuitive, interactive graphical overview of your disk usage using squarified treemaps. It helps you instantly identify what is consuming storage across internal drives, external volumes, and individual folders, making disk cleanup fast, clear, and safe.
 
 ---
 
-## Why Choose MacDirViews?
+## Why Choose DirTreeView?
 
 - **Blazing Fast & Non-Blocking**: Built in Rust with native multi-threaded scanning. Analyzes millions of files in seconds while keeping the interface completely responsive at 60 FPS.
 - **Accurate APFS Accounting**: Measures actual physical disk allocation rather than nominal file sizes. It accounts for sparse files and avoids double-counting APFS copy-on-write clones and hard links.
@@ -44,13 +44,13 @@ MacDirViews provides an intuitive, interactive graphical overview of your disk u
 
 You do **not** need to compile the code yourself. Ready-to-use `.dmg` disk images and `.app` bundles are published for each version:
 
-1. Download the latest `.dmg` or `.app` from [GitHub Releases](https://github.com/Samuconfaa/MacDirViews/releases).
-2. Open the `.dmg` and drag **MacDirViews** into your `/Applications` folder.
+1. Download the latest `.dmg` or `.app` from [GitHub Releases](https://github.com/Samuconfaa/DirTreeView/releases).
+2. Open the `.dmg` and drag **DirTreeView** into your `/Applications` folder.
 
 > [!NOTE]
 > If macOS Gatekeeper blocks an unsigned locally-downloaded build upon initial launch, right-click the app and choose **Open**, or run the following command in Terminal:
 > ```bash
-> xattr -cr /Applications/MacDirViews.app
+> xattr -cr /Applications/DirTreeView.app
 > ```
 
 ### Building from Source (Optional)
@@ -77,10 +77,10 @@ cargo bundle --release
 
 macOS restricts access to sensitive user data (such as Mail, Messages, Safari history, and Photo libraries) via its Transparency, Consent, and Control (TCC) system.
 
-To allow MacDirViews to scan the entire startup disk without encountering permission errors:
+To allow DirTreeView to scan the entire startup disk without encountering permission errors:
 
 1. Open **System Settings** → **Privacy & Security** → **Full Disk Access**.
-2. Click **+** and add **MacDirViews** (or your compiled binary).
+2. Click **+** and add **DirTreeView** (or your compiled binary).
 3. Restart the application.
 
 *(You can also click the in-app **Full Disk Access** button in the top bar to open this settings pane directly).*

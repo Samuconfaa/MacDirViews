@@ -9,12 +9,12 @@ use egui::{Align2, Color32, FontId, Pos2, Stroke};
 
 use super::folder_menu::folder_menu;
 use crate::app::squarify::{squarify, TreemapItem};
-use crate::app::{MacDirViewsApp, ViewMode};
+use crate::app::{DirTreeViewApp, ViewMode};
 use crate::system::finder::open_in_file_manager_label;
 use crate::utils::color::color_for;
 use crate::utils::format::fmt_size;
 
-impl MacDirViewsApp {
+impl DirTreeViewApp {
     pub(in crate::app) fn central_ui(&mut self, ui: &mut egui::Ui, scanning: bool) {
         // --- Barra di navigazione (Breadcrumbs interattivi) ---
         self.nav_bar_ui(ui);
@@ -182,13 +182,20 @@ impl MacDirViewsApp {
                 }
             }
         } else {
+            let current_scanned = self.tree.lock().unwrap().is_scanned(&self.view_dir);
             painter.text(
                 rect.center(),
                 Align2::CENTER_CENTER,
-                if scanning {
+                if scanning || (!self.scan_root.as_os_str().is_empty() && !current_scanned) {
                     "Scansione in corso..."
+                } else if !self.search_query.is_empty() || self.filter_min_size_mb > 0.0 {
+                    "Nessun elemento corrisponde ai filtri."
                 } else {
-                    "Premi \"Start Scan\" o trascina una cartella per iniziare"
+                    if self.scan_root.as_os_str().is_empty() {
+                        "Premi \"Start Scan\" o trascina una cartella per iniziare"
+                    } else {
+                        "Questa cartella non contiene elementi visualizzabili."
+                    }
                 },
                 FontId::proportional(16.0),
                 Color32::GRAY,

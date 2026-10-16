@@ -6,11 +6,11 @@ use std::sync::atomic::Ordering;
 use eframe::egui;
 use egui::{Color32, RichText};
 
-use crate::app::{ActiveTool, MacDirViewsApp};
+use crate::app::{ActiveTool, DirTreeViewApp};
 use crate::system::finder::file_manager_button_label;
 use crate::utils::format::fmt_size;
 
-impl MacDirViewsApp {
+impl DirTreeViewApp {
     pub(in crate::app) fn duplicate_finder_ui(&mut self, ctx: &egui::Context) {
         let is_scanning = *self.duplicates_scanning.lock().unwrap();
         let mut close_window = false;

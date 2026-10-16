@@ -3,10 +3,10 @@
 use eframe::egui;
 use egui::Color32;
 
-use crate::app::MacDirViewsApp;
+use crate::app::DirTreeViewApp;
 use crate::utils::format::fmt_size;
 
-impl MacDirViewsApp {
+impl DirTreeViewApp {
     pub(in crate::app) fn delete_dialog_ui(&mut self, ctx: &egui::Context) {
         let Some((path, permanent)) = self.pending_delete.clone() else {
             return;

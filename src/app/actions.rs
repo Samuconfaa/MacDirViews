@@ -10,14 +10,14 @@ use std::time::Instant;
 use eframe::egui;
 
 use super::block::Block;
-use super::MacDirViewsApp;
+use super::DirTreeViewApp;
 use crate::constants::MAX_BLOCKS;
-use crate::scanner::{find_duplicates, scan_developer_and_system_junk, scan_directory, DirTree};
+use crate::scanner::{find_duplicates, scan_developer_and_system_junk, scan_directory_shallow, DirTree};
 use crate::system::disk::get_disk_usage;
 use crate::system::finder::{move_to_trash, reveal_in_finder};
 use crate::system::protection::is_deletion_forbidden;
 
-impl MacDirViewsApp {
+impl DirTreeViewApp {
     /// Avvia la scansione in un thread separato.
     pub(super) fn start_scan(&mut self, ctx: &egui::Context) {
         let input = self.path_input.trim().to_string();
@@ -66,20 +66,30 @@ impl MacDirViewsApp {
         self.files_counter.store(0, Ordering::Relaxed);
         self.cancel_flag.store(false, Ordering::Relaxed);
         *self.tree.lock().unwrap() = DirTree::new(root.clone());
-        *self.scanning.lock().unwrap() = true;
         self.last_refresh = Instant::now();
 
         // Aggiorna lo spazio su disco
         self.refresh_disk_usage(ctx);
 
-        let scanning = Arc::clone(&self.scanning);
+        self.start_shallow_scan(root, ctx);
+    }
+
+    pub(super) fn start_shallow_scan(&mut self, path: PathBuf, ctx: &egui::Context) {
+        if *self.scanning.lock().unwrap() { return; }
+        self.cancel_flag.store(false, Ordering::Relaxed);
+        *self.scanning.lock().unwrap() = true;
         let tree = Arc::clone(&self.tree);
         let counter = Arc::clone(&self.files_counter);
         let cancel = Arc::clone(&self.cancel_flag);
+        let scanning = Arc::clone(&self.scanning);
+        let completed = Arc::clone(&self.scan_completed);
+        completed.store(false, Ordering::Relaxed);
         let ctx = ctx.clone();
-
         std::thread::spawn(move || {
-            scan_directory(root, scanning, tree, counter, cancel, ctx);
+            scan_directory_shallow(path, tree, counter, cancel);
+            completed.store(true, Ordering::Release);
+            *scanning.lock().unwrap() = false;
+            ctx.request_repaint();
         });
     }
 
@@ -169,7 +179,9 @@ impl MacDirViewsApp {
         let guard = self.tree.lock().unwrap();
         let root_size = guard.total_size();
 
-        let mut all_descendants = guard.all_descendants(&view);
+        let mut all_descendants: Vec<_> = guard.children_of(&view).into_iter()
+            .map(|(_, path, size)| (path, size))
+            .collect();
         if all_descendants.len() > 10 {
             all_descendants.select_nth_unstable_by(10, |a, b| b.1.cmp(&a.1));
             all_descendants.truncate(10);
@@ -177,7 +189,9 @@ impl MacDirViewsApp {
         all_descendants.sort_by(|a, b| b.1.cmp(&a.1));
         let top10 = all_descendants;
 
-        let children_data = guard.children_of(&view);
+        let children_data: Vec<_> = guard.children_of(&view).into_iter()
+            .map(|(name, path, size)| (name, path.clone(), size, guard.is_shallow_complete(&path)))
+            .collect();
         let view_size = guard.size_of(&view);
 
         let top_files = guard.top_files.clone();
@@ -192,8 +206,14 @@ impl MacDirViewsApp {
         let mut blocks: Vec<Block> = Vec::new();
         let mut rest_size: u64 = 0;
         let mut rest_count: usize = 0;
-        for (i, (_name, path, size)) in children_data.into_iter().enumerate() {
+        for (i, (_name, path, size, complete)) in children_data.into_iter().enumerate() {
             if size == 0 {
+                if self.search_query.is_empty() && self.filter_min_size_mb == 0.0 {
+                    let label = path.file_name()
+                        .map(|n| format!("{} ({})", n.to_string_lossy(), if complete { "vuota" } else { "parziale" }))
+                        .unwrap_or_else(|| "(da calcolare)".to_string());
+                    blocks.push(Block { path, label, size: 1, is_dir: true });
+                }
                 continue;
             }
             let min_bytes = (self.filter_min_size_mb as u64) * 1024 * 1024;
@@ -214,10 +234,11 @@ impl MacDirViewsApp {
                 }
             }
             if i < MAX_BLOCKS {
-                let label = path
+                let mut label = path
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| path.display().to_string());
+                if !complete { label.push_str(" (parziale)"); }
                 blocks.push(Block {
                     path,
                     label,

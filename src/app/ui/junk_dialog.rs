@@ -5,11 +5,11 @@ use std::path::PathBuf;
 use eframe::egui;
 use egui::{Color32, RichText};
 
-use crate::app::{ActiveTool, MacDirViewsApp};
+use crate::app::{ActiveTool, DirTreeViewApp};
 use crate::system::finder::{file_manager_button_label, open_in_file_manager_label};
 use crate::utils::format::fmt_size;
 
-impl MacDirViewsApp {
+impl DirTreeViewApp {
     pub(in crate::app) fn junk_cleaner_ui(&mut self, ctx: &egui::Context) {
         let is_scanning = *self.junk_scanning.lock().unwrap();
         let mut close_window = false;

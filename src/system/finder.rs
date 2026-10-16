@@ -62,16 +62,61 @@ pub fn move_to_trash(path: &Path, is_admin: bool) -> Result<(), String> {
     {
         use std::os::windows::process::CommandExt;
         let _ = is_admin;
+        let escaped_path = path.to_string_lossy().replace('\'', "''");
         let script = if path.is_dir() {
-            format!(
-                "Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory('{}', 'OnlyErrorDialogs', 'SendToRecycleBin')",
-                path.to_string_lossy().replace('\'', "''")
-            )
+            format!(r#"
+$path = '{escaped_path}'
+Add-Type -AssemblyName Microsoft.VisualBasic
+try {{
+    [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory(
+        $path,
+        [Microsoft.VisualBasic.FileIO.UIOption]::OnlyErrorDialogs,
+        [Microsoft.VisualBasic.FileIO.RecycleOption]::SendToRecycleBin,
+        [Microsoft.VisualBasic.FileIO.UICancelOption]::ThrowException)
+}} catch {{
+    $visualBasicError = $_.Exception.Message
+    try {{
+        $shell = New-Object -ComObject Shell.Application
+        $recycleBin = $shell.Namespace(10)
+        if ($null -eq $recycleBin) {{ throw 'Il Cestino di Windows non è disponibile.' }}
+        $recycleBin.MoveHere($path, 0x14)
+        $deadline = [DateTime]::UtcNow.AddSeconds(120)
+        while ((Test-Path -LiteralPath $path) -and [DateTime]::UtcNow -lt $deadline) {{
+            Start-Sleep -Milliseconds 100
+        }}
+        if (Test-Path -LiteralPath $path) {{ throw 'L''elemento è ancora presente dopo la richiesta al Cestino.' }}
+    }} catch {{
+        throw "Invio al Cestino fallito. Visual Basic: $visualBasicError. Shell Windows: $($_.Exception.Message)"
+    }}
+}}
+"#)
         } else {
-            format!(
-                "Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile('{}', 'OnlyErrorDialogs', 'SendToRecycleBin')",
-                path.to_string_lossy().replace('\'', "''")
-            )
+            format!(r#"
+$path = '{escaped_path}'
+Add-Type -AssemblyName Microsoft.VisualBasic
+try {{
+    [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile(
+        $path,
+        [Microsoft.VisualBasic.FileIO.UIOption]::OnlyErrorDialogs,
+        [Microsoft.VisualBasic.FileIO.RecycleOption]::SendToRecycleBin,
+        [Microsoft.VisualBasic.FileIO.UICancelOption]::ThrowException)
+}} catch {{
+    $visualBasicError = $_.Exception.Message
+    try {{
+        $shell = New-Object -ComObject Shell.Application
+        $recycleBin = $shell.Namespace(10)
+        if ($null -eq $recycleBin) {{ throw 'Il Cestino di Windows non è disponibile.' }}
+        $recycleBin.MoveHere($path, 0x14)
+        $deadline = [DateTime]::UtcNow.AddSeconds(120)
+        while ((Test-Path -LiteralPath $path) -and [DateTime]::UtcNow -lt $deadline) {{
+            Start-Sleep -Milliseconds 100
+        }}
+        if (Test-Path -LiteralPath $path) {{ throw 'L''elemento è ancora presente dopo la richiesta al Cestino.' }}
+    }} catch {{
+        throw "Invio al Cestino fallito. Visual Basic: $visualBasicError. Shell Windows: $($_.Exception.Message)"
+    }}
+}}
+"#)
         };
         let mut cmd = Command::new("powershell");
         cmd.args(["-NoProfile", "-NonInteractive", "-Command", &script]);

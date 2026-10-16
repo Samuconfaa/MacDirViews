@@ -4,15 +4,21 @@
 use eframe::egui;
 use egui::Color32;
 
-use crate::app::{ActiveTool, MacDirViewsApp};
+use crate::app::{ActiveTool, DirTreeViewApp};
 use crate::system::protection::{list_volumes, scan_all_label, system_root_path};
 use crate::utils::format::fmt_size;
 
-impl MacDirViewsApp {
+impl DirTreeViewApp {
     pub(in crate::app) fn top_bar_ui(&mut self, ctx: &egui::Context, scanning: bool) {
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
             ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| {
+                if ui.button(if self.left_panel_open { "◀ Pannello" } else { "▶ Pannello" })
+                    .on_hover_text("Mostra o nasconde la barra laterale")
+                    .clicked()
+                {
+                    self.left_panel_open = !self.left_panel_open;
+                }
                 ui.label("Percorso:");
                 ui.add(
                     egui::TextEdit::singleline(&mut self.path_input)
@@ -109,7 +115,7 @@ impl MacDirViewsApp {
                         ui.add_space(4.0);
                         ui.label("1. Apri Impostazioni di Sistema");
                         ui.label("2. Privacy e Sicurezza → Accesso completo al disco");
-                        ui.label("3. Clicca '+' e aggiungi MacDirViews");
+                        ui.label("3. Clicca '+' e aggiungi DirTreeView");
                         ui.label("4. Riavvia l'app");
                         ui.add_space(4.0);
                         if ui.button("Apri Impostazioni di Sistema").clicked() {
