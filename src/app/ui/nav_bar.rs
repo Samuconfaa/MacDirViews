@@ -15,6 +15,18 @@ impl DirTreeViewApp {
         let mut navigate_target: Option<PathBuf> = None;
 
         ui.horizontal(|ui| {
+            // Se il menu laterale è a scomparsa ed è nascosto, mostra un pulsante rapido per riaprirlo
+            if !self.left_panel_open {
+                if ui
+                    .button("☰ Menu")
+                    .on_hover_text("Riapri il menu laterale a scomparsa (Cmd+B / Ctrl+B)")
+                    .clicked()
+                {
+                    self.left_panel_open = true;
+                }
+                ui.separator();
+            }
+
             // Pulsanti di navigazione cronologica
             if ui
                 .add_enabled(!self.back_stack.is_empty(), egui::Button::new("◀ Indietro"))

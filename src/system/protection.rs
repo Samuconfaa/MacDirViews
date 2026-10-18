@@ -48,35 +48,36 @@ pub fn is_protected_directory(path: &Path) -> bool {
     false
 }
 
-/// Verifica rapida sul solo nome della cartella per evitare allocazioni PathBuf inutili.
-pub fn is_protected_name(name: &std::ffi::OsStr) -> bool {
+/// Verifica rapida su stringa per evitare allocazioni.
+pub fn is_protected_name_str(s: &str) -> bool {
     #[cfg(windows)]
     {
-        if let Some(s) = name.to_str() {
-            let upper = s.to_ascii_uppercase();
-            if upper == "$RECYCLE.BIN"
-                || upper == "SYSTEM VOLUME INFORMATION"
-                || upper == "RECOVERY"
-                || upper == "$WINDOWS.~BT"
-                || upper == "$WINDOWS.~WS"
-                || upper == "$WINREAGENT"
-                || upper == "CONFIG.MSI"
-            {
-                return true;
-            }
+        let upper = s.to_ascii_uppercase();
+        if upper == "$RECYCLE.BIN"
+            || upper == "SYSTEM VOLUME INFORMATION"
+            || upper == "RECOVERY"
+            || upper == "$WINDOWS.~BT"
+            || upper == "$WINDOWS.~WS"
+            || upper == "$WINREAGENT"
+            || upper == "CONFIG.MSI"
+        {
+            return true;
         }
     }
 
     #[cfg(unix)]
     {
-        if let Some(s) = name.to_str() {
-            if s == "dev" || s == "Network" || s == "net" || s == "cores" || s == ".vol" {
-                return true;
-            }
+        if s == "dev" || s == "Network" || s == "net" || s == "cores" || s == ".vol" {
+            return true;
         }
     }
 
     false
+}
+
+/// Verifica rapida sul solo nome della cartella per evitare allocazioni PathBuf inutili.
+pub fn is_protected_name(name: &std::ffi::OsStr) -> bool {
+    name.to_str().map_or(false, is_protected_name_str)
 }
 
 /// Cartelle che non si devono mai poter eliminare dall'app: la radice, le cartelle

@@ -13,8 +13,9 @@ impl DirTreeViewApp {
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
             ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| {
-                if ui.button(if self.left_panel_open { "◀ Pannello" } else { "▶ Pannello" })
-                    .on_hover_text("Mostra o nasconde la barra laterale")
+                let menu_btn_text = if self.left_panel_open { "◀ Chiudi Menu" } else { "▶ Mostra Menu" };
+                if ui.button(menu_btn_text)
+                    .on_hover_text("Mostra o nasconde il menu laterale a scomparsa (Cmd+B / Ctrl+B)")
                     .clicked()
                 {
                     self.left_panel_open = !self.left_panel_open;

@@ -10,6 +10,7 @@ rfd = "0.15"
 crossbeam-channel = "0.5"
 rayon = "1.10"
 
+
 # Per creare il bundle macOS (DirTreeView.app) con l'icona nel Dock/Finder:
 #   cargo install cargo-bundle && cargo bundle --release
 # Per il Dock serve un file .icns: aggiungilo in assets/ e mettilo in `icon`.

@@ -1,6 +1,7 @@
 //! Azioni sul file manager (Finder su macOS, Esplora Risorse su Windows): mostra nel file manager e sposta nel Cestino.
 
 use std::path::Path;
+#[cfg(any(windows, not(any(target_os = "macos", windows))))]
 use std::process::Command;
 
 #[cfg(target_os = "macos")]

@@ -86,6 +86,9 @@ pub struct DirTreeViewApp {
     pub status: Option<String>,
     pub was_scanning: bool,
     pub last_refresh: Instant,
+    pub scan_start_time: Instant,
+    pub last_scan_duration: Option<std::time::Duration>,
+    pub last_scan_files: u64,
 
     // Cronologia di navigazione (Indietro / Avanti).
     pub back_stack: Vec<PathBuf>,
@@ -159,6 +162,9 @@ impl Default for DirTreeViewApp {
             status: None,
             was_scanning: false,
             last_refresh: Instant::now(),
+            scan_start_time: Instant::now(),
+            last_scan_duration: None,
+            last_scan_files: 0,
             back_stack: Vec::new(),
             fwd_stack: Vec::new(),
             is_admin: is_root(),

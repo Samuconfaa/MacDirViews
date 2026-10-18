@@ -21,11 +21,22 @@ impl DirTreeViewApp {
         let can_modify = !scanning;
 
         egui::SidePanel::left("top10_panel")
-            .min_width(310.0)
+            .resizable(true)
+            .min_width(260.0)
+            .default_width(320.0)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    // --- Ricerca e Filtri ---
-                    ui.heading("🔍 Ricerca e Filtri");
+                    // --- Header con pulsante per nascondere il menu a scomparsa ---
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button("◀ Chiudi Menu")
+                            .on_hover_text("Nascondi questo menu laterale a scomparsa (Cmd+B / Ctrl+B)")
+                            .clicked()
+                        {
+                            self.left_panel_open = false;
+                        }
+                        ui.heading("🔍 Ricerca e Filtri");
+                    });
                     ui.horizontal(|ui| {
                         ui.label("Nome:");
                         if ui

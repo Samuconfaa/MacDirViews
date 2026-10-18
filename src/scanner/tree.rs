@@ -100,8 +100,18 @@ impl DirTree {
         let mut node = &mut self.root;
         for component in rel.components() {
             if let std::path::Component::Normal(c) = component {
-                let name = c.to_string_lossy().into_owned();
-                node = node.children.entry(name).or_insert_with(DirNode::new);
+                if let Some(s) = c.to_str() {
+                    if !node.children.contains_key(s) {
+                        node.children.insert(s.to_string(), DirNode::new());
+                    }
+                    node = node.children.get_mut(s).unwrap();
+                } else {
+                    let s = c.to_string_lossy();
+                    if !node.children.contains_key(s.as_ref()) {
+                        node.children.insert(s.to_string(), DirNode::new());
+                    }
+                    node = node.children.get_mut(s.as_ref()).unwrap();
+                }
             }
         }
         node.direct_size += dir_size;

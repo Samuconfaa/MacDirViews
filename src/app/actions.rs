@@ -67,6 +67,9 @@ impl DirTreeViewApp {
         self.cancel_flag.store(false, Ordering::Relaxed);
         *self.tree.lock().unwrap() = DirTree::new(root.clone());
         self.last_refresh = Instant::now();
+        self.scan_start_time = Instant::now();
+        self.last_scan_duration = None;
+        self.last_scan_files = 0;
 
         // Aggiorna lo spazio su disco
         self.refresh_disk_usage(ctx);

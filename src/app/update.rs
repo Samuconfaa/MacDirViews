@@ -62,10 +62,19 @@ impl eframe::App for DirTreeViewApp {
             self.last_live_sync = std::time::Instant::now();
         }
 
+        // Scorciatoia da tastiera: Cmd+B (macOS) o Ctrl+B per mostrare/nascondere il menu laterale a scomparsa
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::B)) {
+            self.left_panel_open = !self.left_panel_open;
+        }
+
         let scan_completed = self.scan_completed.swap(false, std::sync::atomic::Ordering::Acquire);
         if scanning {
             ctx.request_repaint_after(Duration::from_millis(100));
         } else if self.was_scanning || scan_completed {
+            if self.last_scan_duration.is_none() {
+                self.last_scan_duration = Some(self.scan_start_time.elapsed());
+                self.last_scan_files = self.files_counter.load(std::sync::atomic::Ordering::Relaxed);
+            }
             self.refresh();
             self.refresh_disk_usage(ctx);
             ctx.request_repaint();

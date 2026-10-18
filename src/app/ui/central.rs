@@ -22,12 +22,40 @@ impl DirTreeViewApp {
         ui.horizontal(|ui| {
             if scanning {
                 ui.spinner();
+                let count = self.files_counter.load(Ordering::Relaxed);
+                let elapsed = self.scan_start_time.elapsed().as_secs_f64();
+                let speed_str = if elapsed > 0.05 {
+                    let speed = count as f64 / elapsed;
+                    if speed >= 1_000_000.0 {
+                        format!(" • {:.1}M file/s", speed / 1_000_000.0)
+                    } else if speed >= 1_000.0 {
+                        format!(" • {:.0}k file/s", speed / 1_000.0)
+                    } else {
+                        format!(" • {:.0} file/s", speed)
+                    }
+                } else {
+                    String::new()
+                };
                 ui.label(format!(
-                    "Scansione in corso... {} file analizzati",
-                    self.files_counter.load(Ordering::Relaxed)
+                    "Scansione in corso... {} file analizzati{}",
+                    count, speed_str
                 ));
             } else if self.total_size > 0 {
-                ui.label(format!("Totale scansionato: {}", fmt_size(self.total_size)));
+                let speed_info = if let Some(dur) = self.last_scan_duration {
+                    let secs = dur.as_secs_f64();
+                    let speed = if secs > 0.0 { self.last_scan_files as f64 / secs } else { 0.0 };
+                    let spd_text = if speed >= 1_000_000.0 {
+                        format!("{:.1}M file/s", speed / 1_000_000.0)
+                    } else if speed >= 1_000.0 {
+                        format!("{:.0}k file/s", speed / 1_000.0)
+                    } else {
+                        format!("{:.0} file/s", speed)
+                    };
+                    format!(" (in {:.2}s a {})", secs, spd_text)
+                } else {
+                    String::new()
+                };
+                ui.label(format!("Totale scansionato: {}{}", fmt_size(self.total_size), speed_info));
                 if self.skipped_dirs > 0 {
                     ui.colored_label(
                         Color32::YELLOW,
